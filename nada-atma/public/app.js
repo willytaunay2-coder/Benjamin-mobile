@@ -48,6 +48,7 @@ function toast(msg, isError = false) {
 
 function modal(html, onMount) {
   const root = document.getElementById('modal-root');
+  document.getElementById('toast').className = 'toast'; // un message précédent ne doit pas masquer la fenêtre
   root.innerHTML = `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`;
   const backdrop = root.firstChild;
   const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
@@ -219,13 +220,15 @@ function memberAction(s) {
   if (s.my_status === 'enrolled') {
     return `<span class="badge ok">Mon cours</span><button class="btn secondary small" data-manage="${s.id}">Annuler</button>`;
   }
+  const weekTaken = state.takenWeeks && state.takenWeeks.has(mondayOf(s.date));
   if (s.my_status === 'released') {
-    return `<span class="badge warn">Annulé</span>${s.spots_left > 0 ? `<button class="btn ghost small" data-unrelease="${s.id}">Me réinscrire</button>` : ''}`;
+    return `<span class="badge warn">Annulé</span>${s.spots_left > 0 && !weekTaken ? `<button class="btn ghost small" data-unrelease="${s.id}">Me réinscrire</button>` : ''}`;
   }
   if (s.my_status === 'booked') {
     return `<span class="badge ok">Inscrit·e</span><button class="btn ghost small" data-manage="${s.id}">Annuler</button>`;
   }
   if (s.spots_left <= 0) return '<span class="badge plum">Complet</span>';
+  if (weekTaken) return '<span class="small muted week-taken">Déjà un cours cette semaine</span>';
   return `<button class="btn small" data-book="${s.id}">S’inscrire</button>`;
 }
 
@@ -305,6 +308,21 @@ function filtersHtml(sessions) {
 // ---------- Réservation / déplacement ----------
 async function afterChange(after) { try { await refreshMe(); } catch { /* */ } after && after(); }
 
+// Confirmation avant de s'inscrire sur une place libre
+function confirmBook(s, after) {
+  if (!state.user || !s) { book(s ? s.id : 0, after); return; }
+  modal(`
+    <div class="modal-head"><h2>S’inscrire à ce cours ?</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="confirm-slot">
+      <div class="day-time"><strong>${hm(s.start_time)}</strong><span>${hm(endTime(s.start_time, s.duration_min))}</span></div>
+      <div><strong>${cap(fmtFull(s.date))}</strong><div class="small muted">${esc(s.title)} · ${s.duration_min} min${s.location ? ` · ${esc(s.location)}` : ''}</div></div>
+    </div>
+    <p class="small muted">Un seul cours par semaine. Si vous ne pouvez finalement pas venir, annulez pour laisser la place à quelqu’un d’autre.</p>
+    <div class="btn-row" style="margin-top:14px"><button class="btn" id="confirm-book">Confirmer l’inscription</button><button class="btn ghost" data-close>Retour</button></div>`, (m, close) => {
+    m.querySelector('#confirm-book').onclick = async (e) => { e.target.disabled = true; close(); await book(s.id, after); };
+  });
+}
+
 async function book(sessionId, after) {
   if (!state.user) { toast('Connectez-vous pour vous inscrire'); location.hash = '#/connexion'; return; }
   try {
@@ -370,6 +388,8 @@ async function viewPlanning() {
   }
   setHashParams('#/planning', { semaine: p.semaine ? from : '' });
   const to = addDays(from, 6);
+  // Un cours par semaine : les semaines où l'élève a déjà un cours
+  state.takenWeeks = new Set(data.sessions.filter((x) => !x.cancelled && (x.my_status === 'enrolled' || x.my_status === 'booked')).map((x) => mondayOf(x.date)));
   $view.innerHTML = `
     ${!state.user ? `<div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p>
       <p class="muted">Consultez le planning et <a href="#/inscription">créez votre compte</a> pour choisir votre créneau.</p></div>` : greetingHtml(data.sessions) + slotBanner()}
@@ -397,7 +417,7 @@ function memberClicks(e, sessions, after, onFilter) {
   const f = e.target.closest('[data-filter]');
   if (f && onFilter) { state.filter = f.dataset.filter; onFilter(); return; }
   const b = e.target.closest('[data-book]');
-  if (b) { b.disabled = true; book(b.dataset.book, after); return; }
+  if (b) { confirmBook(sessions.find((x) => String(x.id) === b.dataset.book), after); return; }
   const ac = e.target.closest('[data-accept]');
   if (ac) { answerEnrollment(ac.dataset.accept, true, after); return; }
   const de = e.target.closest('[data-decline]');

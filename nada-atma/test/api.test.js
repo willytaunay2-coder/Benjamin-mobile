@@ -351,3 +351,47 @@ test('la professeure crée un compte élève avec son créneau, le change, réin
   assert.equal((await eve('GET', '/api/me')).data.user, null);
   assert.equal((await eve('POST', '/api/login', { email: 'eve@example.com', password: r.data.temp_password })).status, 200);
 });
+
+test('un cours par semaine : pas de deuxième inscription la même semaine', async (t) => {
+  NOW = new Date(2026, 8, 4, 10, 0); // vendredi 4 septembre 2026
+  const { server, client } = await start();
+  t.after(() => server.close());
+  const admin = client(), alice = client(), bob = client(), eve = client();
+  await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  await admin('PUT', '/api/admin/settings', { booking_horizon_days: 0 });
+  const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2026-12-31' })).data.template;
+  const jeu = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 4, start_time: '18:30', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2026-12-31' })).data.template;
+  const login = async (c, name, slot) => {
+    const r = await admin('POST', '/api/admin/users', { name, email: `${name.toLowerCase()}@example.com`, template_id: slot, send_email: false });
+    await c('POST', '/api/login', { email: `${name.toLowerCase()}@example.com`, password: r.data.temp_password });
+  };
+  await login(alice, 'Alice', mar.id);
+  await login(bob, 'Bob', jeu.id);
+  await login(eve, 'Eve', null);
+  const s = (await admin('GET', '/api/sessions?from=2026-09-07&to=2026-09-13')).data.sessions;
+  const tue = s.find((x) => x.date === '2026-09-08'), thu = s.find((x) => x.date === '2026-09-10');
+
+  // Alice a son cours mardi : impossible de s'inscrire jeudi la même semaine
+  let r = await alice('POST', `/api/sessions/${thu.id}/book`);
+  assert.equal(r.status, 409);
+  assert.match(r.data.error, /Un cours par semaine : vous êtes déjà inscrit·e le mardi 8 septembre à 19h/);
+  // Elle annule mardi : elle peut prendre jeudi
+  assert.equal((await alice('POST', `/api/sessions/${tue.id}/release`)).status, 200);
+  assert.equal((await alice('POST', `/api/sessions/${thu.id}/book`)).status, 200);
+  // …mais ne peut plus reprendre mardi tant qu'elle est inscrite jeudi
+  r = await alice('POST', `/api/sessions/${tue.id}/unrelease`);
+  assert.equal(r.status, 409);
+  assert.match(r.data.error, /jeudi 10 septembre à 18h30/);
+
+  // Eve (sans créneau) : une place libre par semaine
+  assert.equal((await eve('POST', `/api/sessions/${tue.id}/book`)).status, 200);
+  assert.equal((await eve('POST', `/api/sessions/${thu.id}/book`)).status, 409);
+  // La semaine suivante, c'est de nouveau possible
+  const thu2 = (await admin('GET', '/api/sessions?from=2026-09-17&to=2026-09-17')).data.sessions[0];
+  assert.equal((await eve('POST', `/api/sessions/${thu2.id}/book`)).status, 200);
+
+  // La professeure peut faire une exception
+  const bobId = (await bob('GET', '/api/me')).data.user.id;
+  const tue2 = (await admin('GET', '/api/sessions?from=2026-09-15&to=2026-09-15')).data.sessions[0];
+  assert.equal((await admin('POST', `/api/admin/sessions/${tue2.id}/attendees`, { user_id: bobId })).status, 200);
+});

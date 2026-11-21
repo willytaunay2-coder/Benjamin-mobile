@@ -570,3 +570,8 @@ table.roll .sign { width: 28%; }
   .mchip { justify-content: center; padding: 3px 1px; font-size: .6rem; border-radius: 6px; }
   .mchip .n, .mclosed { display: none; }
 }
+
+/* Confirmation d'inscription */
+.confirm-slot { display: flex; align-items: center; gap: 14px; padding: 14px; margin: 4px 0 12px; border-radius: 18px; background: var(--plum-soft); }
+.confirm-slot .day-time { background: #fff; }
+.week-taken { font-style: italic; text-align: right; }

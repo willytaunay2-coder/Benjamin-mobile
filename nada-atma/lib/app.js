@@ -252,7 +252,21 @@ function createApp(db, opts = {}) {
   }
 
   // Vérifie qu'un membre peut réserver cette séance
-  function assertBookable(s, user, { ignoreHorizon = false } = {}) {
+  // Un cours par semaine : la séance déjà prévue cette semaine-là (son cours non annulé, ou une place prise)
+  function courseInWeek(userId, date) {
+    const mon = D.addDays(date, -((D.weekday(date) + 6) % 7)), sun = D.addDays(mon, 6);
+    const own = q(`SELECT s.* FROM sessions s JOIN enrollments e ON ${COVERS} AND e.user_id = ?
+                   WHERE s.date BETWEEN ? AND ? AND s.cancelled = 0
+                     AND NOT EXISTS (SELECT 1 FROM absences a WHERE a.session_id = s.id AND a.user_id = ?)
+                   ORDER BY s.date, s.start_time`).get(userId, mon, sun, userId);
+    if (own) return own;
+    return q(`SELECT s.* FROM bookings b JOIN sessions s ON s.id = b.session_id
+              WHERE b.user_id = ? AND b.status = 'booked' AND s.cancelled = 0 AND s.date BETWEEN ? AND ?
+              ORDER BY s.date, s.start_time`).get(userId, mon, sun) || null;
+  }
+  const weekLimitMsg = (x) => `Un cours par semaine : vous êtes déjà inscrit·e le ${longDate(x.date)} à ${hhmm(x.start_time)}. Pour changer, annulez d'abord ce cours.`;
+
+  function assertBookable(s, user, { ignoreHorizon = false, ignoreWeekLimit = false } = {}) {
     if (s.cancelled) fail(409, 'Cette séance est annulée');
     const start = D.sessionStart(s.date, s.start_time);
     if (start <= now()) fail(409, 'Cette séance est déjà passée');
@@ -264,6 +278,10 @@ function createApp(db, opts = {}) {
     if (st === 'booked') fail(409, 'Vous êtes déjà inscrit·e à cette séance');
     if (st === 'enrolled') fail(409, 'C\'est déjà votre créneau : votre place vous attend');
     if (occupiedOf(s) >= s.capacity) fail(409, 'Cette séance est complète');
+    if (!ignoreWeekLimit) {
+      const x = courseInWeek(user.id, s.date);
+      if (x && x.id !== s.id) fail(409, weekLimitMsg(x));
+    }
   }
 
 
@@ -523,6 +541,8 @@ function createApp(db, opts = {}) {
       const a = absenceOf(s, user.id) || fail(404, 'Aucune place libérée sur cette séance');
       if (D.sessionStart(s.date, s.start_time) <= now()) fail(409, 'Cette séance est déjà passée');
       if (occupiedOf(s) >= s.capacity) fail(409, 'Votre place a été prise entre-temps. Choisissez un autre créneau.');
+      const other = courseInWeek(user.id, s.date);
+      if (other) fail(409, weekLimitMsg(other));
       q('DELETE FROM absences WHERE id = ?').run(a.id);
       return { ok: true, credits: creditsFor(user.id) };
     });
@@ -548,6 +568,8 @@ function createApp(db, opts = {}) {
       if (statusOf(t2, user.id).status === 'released') {
         // revenir sur son propre créneau
         if (occupiedOf(t2) >= t2.capacity) fail(409, 'Cette séance est complète');
+        const other = courseInWeek(user.id, t2.date);
+        if (other) fail(409, weekLimitMsg(other));
         q('DELETE FROM absences WHERE session_id = ? AND user_id = ?').run(t2.id, user.id);
       } else {
         assertBookable(t2, user);
@@ -630,8 +652,8 @@ function createApp(db, opts = {}) {
       if (target.id === from.id) fail(400, 'Choisissez une autre séance');
       if (!from.cancelled) assertChangeable(from, user.role === 'admin');
       const owner = q('SELECT * FROM users WHERE id = ?').get(b.user_id);
-      assertBookable(target, owner);
       q("UPDATE bookings SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?").run(b.id);
+      assertBookable(target, owner, { ignoreWeekLimit: user.role === 'admin' });
       const r = q('INSERT INTO bookings(session_id, user_id) VALUES (?, ?)').run(target.id, owner.id);
       return { booking_id: Number(r.lastInsertRowid), session: decorateSession(getSession(target.id), owner) };
     });
@@ -928,7 +950,7 @@ function createApp(db, opts = {}) {
     return tx(db, () => {
       const s = getSession(params.id);
       const u = q('SELECT * FROM users WHERE id = ?').get(int(body.user_id, 1, 1e12, 'Membre')) || fail(404, 'Membre introuvable');
-      assertBookable(s, u, { ignoreHorizon: true });
+      assertBookable(s, u, { ignoreHorizon: true, ignoreWeekLimit: true }); // la professeure peut faire une exception
       const r = q('INSERT INTO bookings(session_id, user_id) VALUES (?, ?)').run(s.id, u.id);
       return { booking_id: Number(r.lastInsertRowid) };
     });
