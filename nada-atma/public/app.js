@@ -272,7 +272,7 @@ function sessionCard(s, { admin = false } = {}) {
   const meta = [
     `${s.duration_min} min`,
     s.location && `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>${esc(s.location)}`,
-    admin ? (s.cancelled ? '' : `${rateHtml(s.occupied, s.capacity)}${s.absent_count ? ` · ${s.absent_count} annulation${s.absent_count > 1 ? 's' : ''}` : ''}`) : (!s.cancelled && !s.is_past ? spotsHtml(s) : ''),
+    admin ? (s.cancelled ? '' : `${rateHtml(s.occupied, s.capacity)}${s.absent_count ? ` · ${s.absent_count} annulation${s.absent_count > 1 ? 's' : ''}` : ''}${s.waiting_count ? ` · <strong class="wait-count">${s.waiting_count} en attente</strong>` : ''}`) : (!s.cancelled && !s.is_past ? spotsHtml(s) : ''),
   ].filter(Boolean).map((m) => `<span>${m}</span>`).join('');
 
   let action = '';
@@ -313,7 +313,8 @@ function memberAction(s) {
   if (s.my_status === 'booked') {
     return `<span class="badge ok">Inscrit·e</span><button class="btn ghost small" data-manage="${s.id}">Annuler</button>`;
   }
-  if (s.spots_left <= 0) return '<span class="badge plum">Complet</span>';
+  if (s.my_wait_pos) return `<span class="badge warn">Liste d’attente · n° ${s.my_wait_pos}</span><button class="btn ghost small" data-unwait="${s.id}">Quitter la liste</button>`;
+  if (s.spots_left <= 0) return weekTaken ? '<span class="badge plum">Complet</span>' : `<span class="badge plum">Complet</span><button class="btn secondary small" data-wait="${s.id}">Liste d’attente</button>`;
   if (weekTaken) return '<span class="small muted week-taken">Déjà un cours cette semaine</span>';
   return `<button class="btn small" data-book="${s.id}">S’inscrire</button>`;
 }
@@ -397,6 +398,26 @@ function filtersHtml(sessions) {
 
 // ---------- Réservation / déplacement ----------
 async function afterChange(after) { try { await refreshMe(); } catch { /* */ } after && after(); }
+
+// Confirmation avant de rejoindre la liste d'attente d'un cours complet
+function confirmWait(s, after) {
+  if (!s) return;
+  modal(`
+    <div class="modal-head"><h2>Rejoindre la liste d’attente ?</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="confirm-slot">
+      <div class="day-time"><strong>${hm(s.start_time)}</strong><span>${hm(endTime(s.start_time, s.duration_min))}</span></div>
+      <div><strong>${cap(fmtFull(s.date))}</strong><div class="small muted">${esc(s.title)} · complet</div></div>
+    </div>
+    <p>Vous seriez <strong>n° ${(s.waiting_count || 0) + 1}</strong> sur la liste.</p>
+    <p class="small muted">Si une place se libère, la première personne de la liste est inscrite automatiquement et prévenue par notification. Vous pouvez quitter la liste à tout moment.</p>
+    <div class="btn-row" style="margin-top:14px"><button class="btn" id="confirm-wait">Rejoindre la liste</button><button class="btn ghost" data-close>Retour</button></div>`, (m, close) => {
+    m.querySelector('#confirm-wait').onclick = async (e) => {
+      e.target.disabled = true;
+      try { const r = await api(`/api/sessions/${s.id}/waitlist`, { method: 'POST' }); close(); toast(`Vous êtes n° ${r.position} sur la liste d’attente`); afterChange(after); }
+      catch (err) { close(); toast(err.message, true); }
+    };
+  });
+}
 
 // Confirmation avant de s'inscrire sur une place libre
 function confirmBook(s, after) {
@@ -509,6 +530,16 @@ function memberClicks(e, sessions, after, onFilter) {
   if (f && onFilter) { state.filter = f.dataset.filter; onFilter(); return; }
   const b = e.target.closest('[data-book]');
   if (b) { confirmBook(sessions.find((x) => String(x.id) === b.dataset.book), after); return; }
+  const w = e.target.closest('[data-wait]');
+  if (w) { confirmWait(sessions.find((x) => String(x.id) === w.dataset.wait), after); return; }
+  const uw = e.target.closest('[data-unwait]');
+  if (uw) {
+    uw.disabled = true;
+    api(`/api/sessions/${uw.dataset.unwait}/waitlist/leave`, { method: 'POST' })
+      .then(() => { toast('Vous avez quitté la liste d’attente'); afterChange(after); })
+      .catch((err) => { toast(err.message, true); uw.disabled = false; });
+    return;
+  }
   const ac = e.target.closest('[data-accept]');
   if (ac) { answerEnrollment(ac.dataset.accept, true, after); return; }
   const de = e.target.closest('[data-decline]');
@@ -748,7 +779,7 @@ async function viewAdminSessions() {
 }
 
 async function sessionDetailModal(id, after) {
-  const [{ session: s, attendees, absent }, { users }, { templates }] = await Promise.all([api(`/api/admin/sessions/${id}`), api('/api/admin/users'), api('/api/admin/templates')]);
+  const [{ session: s, attendees, absent, waiting }, { users }, { templates }] = await Promise.all([api(`/api/admin/sessions/${id}`), api('/api/admin/users'), api('/api/admin/templates')]);
   const others = users.filter((u) => u.active && !attendees.some((a) => a.id === u.id) && !absent.some((a) => a.id === u.id));
   const kindBadge = { regular: '<span class="badge">À l’année</span>', makeup: '<span class="badge ok">Place libre</span>' };
   const personRow = (a, btn) => `<div class="list-item"><div class="grow"><strong>${esc(a.name)}</strong> ${kindBadge[a.kind] || ''}<div class="small muted">${esc(a.email)}${a.phone ? ` · <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>` : ''}</div></div>${btn}</div>`;
@@ -762,6 +793,20 @@ async function sessionDetailModal(id, after) {
       ? `<button class="btn ghost small" data-unbook="${a.booking_id}">Retirer</button>`
       : `<span class="btn-row tight"><button class="btn ghost small" data-slot="${a.id}">Changer son créneau</button><button class="btn ghost small" data-absent="${a.id}">Absent·e</button></span>`)).join('') : '<p class="muted small">Personne pour le moment.</p>'}
     ${absent.length ? `<h3 style="margin-top:14px">Places libérées (${absent.length})</h3>${absent.map((a) => personRow(a, `<button class="btn ghost small" data-present="${a.id}">Remettre</button>`)).join('')}` : ''}
+    ${!s.cancelled && !s.is_past && (waiting.length || s.spots_left <= 0) ? `
+      <h3 style="margin-top:14px">Liste d’attente (${waiting.length})</h3>
+      <p class="small muted">Par ordre de demande. Si une place se libère, la première personne disponible est inscrite automatiquement et prévenue. Changez l’ordre avec les flèches.</p>
+      ${waiting.length ? `<ol class="waitlist">${waiting.map((w, i) => `<li>
+        <span class="wpos">${i + 1}</span>
+        <div class="grow"><strong>${esc(w.name)}</strong><div class="small muted">Demandé le ${new Date(w.created_at.replace(' ', 'T') + 'Z').toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div></div>
+        <span class="btn-row tight">
+          <button class="icon-btn" data-wmove="${i}" data-dir="-1" ${i === 0 ? 'disabled' : ''} aria-label="Faire monter ${esc(w.name)}"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button>
+          <button class="icon-btn" data-wmove="${i}" data-dir="1" ${i === waiting.length - 1 ? 'disabled' : ''} aria-label="Faire descendre ${esc(w.name)}"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+          <button class="btn ghost small" data-wremove="${w.id}">Retirer</button>
+        </span></li>`).join('')}</ol>` : '<p class="small muted">Personne pour l’instant.</p>'}
+      ${others.filter((u) => u.role === 'member' && !waiting.some((w) => w.id === u.id)).length ? `<div class="btn-row" style="margin:10px 0 18px">
+        <select id="addwait" style="flex:1" aria-label="Ajouter à la liste d’attente"><option value="">Ajouter à la liste d’attente…</option>${others.filter((u) => u.role === 'member' && !waiting.some((w) => w.id === u.id)).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
+        <button class="btn secondary small" id="addwaitbtn">Ajouter</button></div>` : ''}` : ''}
     ${!s.cancelled && !s.is_past && s.spots_left > 0 && others.length ? `
       <div class="btn-row" style="margin:10px 0 18px">
         <select id="adduser" style="flex:1"><option value="">Ajouter quelqu’un pour cette séance…</option>${others.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
@@ -776,6 +821,20 @@ async function sessionDetailModal(id, after) {
     </div>`, (m, close) => {
     const reopen = () => { after && after(); sessionDetailModal(id, after); };
     m.addEventListener('click', async (e) => {
+      const wm = e.target.closest('[data-wmove]');
+      if (wm) {
+        const ids = waiting.map((w) => w.id); const i = Number(wm.dataset.wmove), j = i + Number(wm.dataset.dir);
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        try { await api(`/api/admin/sessions/${id}/waitlist`, { method: 'PUT', body: { user_ids: ids } }); toast('Ordre de la liste modifié'); reopen(); }
+        catch (err) { toast(err.message, true); }
+        return;
+      }
+      const wr = e.target.closest('[data-wremove]');
+      if (wr) {
+        try { await api(`/api/admin/sessions/${id}/waitlist/remove`, { method: 'POST', body: { user_id: Number(wr.dataset.wremove) } }); toast('Retiré·e de la liste d’attente'); reopen(); }
+        catch (err) { toast(err.message, true); }
+        return;
+      }
       const sl = e.target.closest('[data-slot]');
       if (sl) { const who = users.find((x) => String(x.id) === sl.dataset.slot); if (who) studentModal(who, templates, after); return; }
       const u = e.target.closest('[data-unbook]');
@@ -794,6 +853,13 @@ async function sessionDetailModal(id, after) {
         catch (err) { toast(err.message, true); }
       }
     });
+    const addwait = m.querySelector('#addwaitbtn');
+    if (addwait) addwait.onclick = async () => {
+      const uid = m.querySelector('#addwait').value;
+      if (!uid) return;
+      try { await api(`/api/admin/sessions/${id}/waitlist`, { method: 'POST', body: { user_id: Number(uid) } }); toast('Ajouté·e à la liste d’attente'); reopen(); }
+      catch (err) { toast(err.message, true); }
+    };
     const addbtn = m.querySelector('#addbtn');
     if (addbtn) addbtn.onclick = async () => {
       const uid = m.querySelector('#adduser').value;
@@ -992,6 +1058,7 @@ async function viewAdminDay() {
       ${s.cancelled ? `<p class="small muted">Séance annulée${s.cancel_reason ? ` : ${esc(s.cancel_reason)}` : ''}.</p>` : `
       <ol class="people">${x.attendees.map((a) => `<li><span>${esc(a.name)}</span>${a.kind === 'makeup' ? '<span class="badge ok">Place libre</span>' : ''}</li>`).join('') || '<li class="muted">Personne pour l’instant</li>'}</ol>
       ${x.absent.length ? `<p class="small muted day-absent">Ont annulé : ${x.absent.map((a) => esc(a.name)).join(', ')}</p>` : ''}
+      ${x.waiting && x.waiting.length ? `<p class="small day-wait">Liste d’attente : ${x.waiting.map((w, i) => `${i + 1}. ${esc(w.name)}`).join(' · ')}</p>` : ''}
       ${s.capacity - occ > 0 ? `<p class="small day-free">${plural(s.capacity - occ, 'place')} libre${s.capacity - occ > 1 ? 's' : ''}</p>` : ''}`}
       <div class="btn-row"><button class="btn secondary small" data-session="${s.id}">Détails et modifications</button></div>
     </section>`;

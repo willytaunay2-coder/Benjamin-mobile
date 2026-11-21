@@ -159,11 +159,46 @@ function createApp(db, opts = {}) {
       body: `${s.title} : ${occupiedOf(s)} / ${s.capacity} places occupées.`, link: `#/admin/jour?date=${s.date}` }, false);
   }
 
+  // ---------- Liste d'attente ----------
+  const waitRows = (sessionId) => q('SELECT * FROM waitlist WHERE session_id = ? ORDER BY position, id').all(sessionId);
+  function waitPosition(sessionId, userId) {
+    const i = waitRows(sessionId).findIndex((w) => w.user_id === userId);
+    return i < 0 ? null : i + 1;
+  }
+  // Inscrit·e ailleurs cette semaine : ses autres attentes de la semaine n'ont plus lieu d'être
+  function clearWeekWaits(userId, date, exceptSessionId = 0) {
+    const mon = D.addDays(date, -((D.weekday(date) + 6) % 7));
+    q(`DELETE FROM waitlist WHERE user_id = ? AND session_id != ? AND session_id IN (SELECT id FROM sessions WHERE date BETWEEN ? AND ?)`)
+      .run(userId, exceptSessionId, mon, D.addDays(mon, 6));
+    q('DELETE FROM waitlist WHERE user_id = ? AND session_id = ?').run(userId, exceptSessionId);
+  }
+  // Une place se libère : la première personne de la liste (encore disponible cette semaine) est inscrite d'office
+  function promoteWaitlist(sessionId) {
+    let s = getSession(sessionId);
+    if (s.cancelled || D.sessionStart(s.date, s.start_time) <= now()) return 0;
+    let n = 0;
+    for (const w of waitRows(s.id)) {
+      s = getSession(s.id);
+      if (s.capacity - occupiedOf(s) <= 0) break;
+      const u = q('SELECT * FROM users WHERE id = ? AND active = 1').get(w.user_id);
+      if (!u || statusOf(s, u.id).status || courseInWeek(u.id, s.date)) continue; // pas disponible : garde sa place dans la liste
+      q('INSERT INTO bookings(session_id, user_id) VALUES (?, ?)').run(s.id, u.id);
+      clearWeekWaits(u.id, s.date, s.id);
+      const when = `${longDate(s.date)} à ${hhmm(s.start_time)}`;
+      notify([u.id], { kind: 'waitlist', title: `Vous êtes inscrit·e ${when}`, link: weekLink(s.date),
+        body: `Une place s’est libérée : vous passez de la liste d’attente au cours « ${s.title} » du ${when}. Si vous ne pouvez plus venir, annulez pour laisser la place à la personne suivante.` });
+      tellProf(u.id, s.id, 'passe de la liste d’attente au cours du');
+      n++;
+    }
+    return n;
+  }
+
   function placeFreed(sessionId, byUserId) {
-    const s = getSession(sessionId);
+    let s = getSession(sessionId);
     if (s.cancelled || D.sessionStart(s.date, s.start_time) <= now()) return;
+    if (promoteWaitlist(s.id)) s = getSession(s.id);
     const left = s.capacity - occupiedOf(s);
-    if (left <= 0) return;
+    if (left <= 0) { tellCancel(s, byUserId); return; }
     const when = `${longDate(s.date)} à ${hhmm(s.start_time)}`;
     const link = `#/planning?semaine=${D.addDays(s.date, -((D.weekday(s.date) + 6) % 7))}`;
     const recipients = q("SELECT id FROM users WHERE active = 1 AND role = 'member' AND id != ?").all(byUserId)
@@ -171,8 +206,12 @@ function createApp(db, opts = {}) {
       .filter((id) => !courseInWeek(id, s.date)); // un cours par semaine : inutile de prévenir qui a déjà le sien
     notify(recipients, { kind: 'place', title: `Une place est libre ${when}`, link,
       body: `Une place vient de se libérer pour le cours « ${s.title} » du ${when}${left > 1 ? ` (${left} places libres)` : ''}. Le premier ou la première qui s’inscrit l’obtient.` });
+    tellCancel(s, byUserId);
+  }
+  function tellCancel(s, byUserId) {
+    const when = `${longDate(s.date)} à ${hhmm(s.start_time)}`;
     const who = q('SELECT name FROM users WHERE id = ?').get(byUserId)?.name || 'Quelqu\'un';
-    notify(adminIds().filter((id) => id !== byUserId), { kind: 'admin', title: `${who} annule sa venue`, body: `${s.title}, ${when}.`, link: `#/admin?semaine=${link.split('=')[1]}` }, false);
+    notify(adminIds().filter((id) => id !== byUserId), { kind: 'admin', title: `${who} annule sa venue`, body: `${s.title}, ${when}.`, link: `#/admin/jour?date=${s.date}` }, false);
   }
 
   function currentUser(req) {
@@ -199,7 +238,8 @@ function createApp(db, opts = {}) {
       (SELECT COUNT(*) FROM enrollments e WHERE ${COVERS}) AS enrolled_count,
       (SELECT COUNT(*) FROM absences a JOIN enrollments e ON e.user_id = a.user_id
          WHERE a.session_id = s.id AND ${COVERS}) AS absent_count,
-      (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'booked') AS booked_count
+      (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'booked') AS booked_count,
+      (SELECT COUNT(*) FROM waitlist w WHERE w.session_id = s.id) AS waiting_count
     FROM sessions s`;
 
   const occupiedOf = (s) => s.enrolled_count - s.absent_count + s.booked_count;
@@ -234,6 +274,7 @@ function createApp(db, opts = {}) {
       const st = statusOf(s, user.id);
       out.my_status = st.status;
       out.my_booking_id = st.booking_id;
+      out.my_wait_pos = waitPosition(s.id, user.id);
     }
     return out;
   }
@@ -589,6 +630,7 @@ function createApp(db, opts = {}) {
       const other = courseInWeek(user.id, s.date);
       if (other) fail(409, weekLimitMsg(other));
       q('DELETE FROM absences WHERE id = ?').run(a.id);
+      clearWeekWaits(user.id, s.date, s.id);
       tellProf(user.id, s.id, 'revient finalement');
       return { ok: true, credits: creditsFor(user.id) };
     });
@@ -622,6 +664,7 @@ function createApp(db, opts = {}) {
         assertBookable(t2, user);
         assertQuota(user);
         q('INSERT INTO bookings(session_id, user_id) VALUES (?, ?)').run(t2.id, user.id);
+        clearWeekWaits(user.id, t2.date, t2.id);
         tellProf(user.id, t2.id);
       }
       placeFreed(from.id, user.id);
@@ -642,6 +685,60 @@ function createApp(db, opts = {}) {
     }
     return { user: publicUser(q('SELECT * FROM users WHERE id = ?').get(user.id)) };
   }, 'user');
+
+  // ---------- Liste d'attente (élèves) ----------
+  route('POST', '/api/sessions/:id/waitlist', async ({ params, user }) => {
+    return tx(db, () => {
+      const s = getSession(params.id);
+      if (user.role === 'admin') fail(403, 'La professeure ne s’inscrit pas aux cours');
+      if (s.cancelled) fail(409, 'Cette séance est annulée');
+      if (D.sessionStart(s.date, s.start_time) <= now()) fail(409, 'Cette séance est déjà passée');
+      if (statusOf(s, user.id).status) fail(409, 'Vous avez déjà une place sur ce cours');
+      if (occupiedOf(s) < s.capacity) fail(409, 'Il reste une place : inscrivez-vous directement');
+      const x = courseInWeek(user.id, s.date);
+      if (x) fail(409, weekLimitMsg(x));
+      if (waitPosition(s.id, user.id)) fail(409, 'Vous êtes déjà sur la liste d’attente');
+      const max = q('SELECT MAX(position) m FROM waitlist WHERE session_id = ?').get(s.id).m || 0;
+      q('INSERT INTO waitlist(session_id, user_id, position) VALUES (?,?,?)').run(s.id, user.id, max + 1);
+      const pos = waitPosition(s.id, user.id);
+      const when = `${longDate(s.date)} à ${hhmm(s.start_time)}`;
+      notify(adminIds(), { kind: 'admin', title: `${user.name} en liste d’attente ${when}`, body: `${s.title} : n° ${pos} sur la liste.`, link: `#/admin/jour?date=${s.date}` }, false);
+      return { position: pos, session: decorateSession(getSession(s.id), user) };
+    });
+  }, 'user');
+  route('POST', '/api/sessions/:id/waitlist/leave', async ({ params, user }) => {
+    q('DELETE FROM waitlist WHERE session_id = ? AND user_id = ?').run(params.id, user.id);
+    return { ok: true };
+  }, 'user');
+
+  // ---------- Liste d'attente (professeure) : ajouter, retirer, changer l'ordre ----------
+  route('POST', '/api/admin/sessions/:id/waitlist', async ({ params, body }) => {
+    return tx(db, () => {
+      const s = getSession(params.id);
+      const u = q("SELECT * FROM users WHERE id = ? AND role = 'member'").get(int(body.user_id, 1, 1e12, 'Élève')) || fail(404, 'Élève introuvable');
+      if (statusOf(s, u.id).status === 'enrolled' || statusOf(s, u.id).status === 'booked') fail(409, `${u.name} a déjà une place sur ce cours`);
+      if (waitPosition(s.id, u.id)) fail(409, `${u.name} est déjà sur la liste`);
+      const max = q('SELECT MAX(position) m FROM waitlist WHERE session_id = ?').get(s.id).m || 0;
+      q('INSERT INTO waitlist(session_id, user_id, position) VALUES (?,?,?)').run(s.id, u.id, max + 1);
+      return { waiting: attendeesOf(s.id).waiting };
+    });
+  }, 'admin');
+  route('PUT', '/api/admin/sessions/:id/waitlist', async ({ params, body }) => {
+    return tx(db, () => {
+      const s = getSession(params.id);
+      const ids = Array.isArray(body.user_ids) ? body.user_ids.map(Number) : fail(400, 'Ordre invalide');
+      const cur = waitRows(s.id).map((w) => w.user_id);
+      if (ids.length !== cur.length || !cur.every((id) => ids.includes(id))) fail(409, 'La liste a changé entre-temps : rechargez');
+      const up = q('UPDATE waitlist SET position = ? WHERE session_id = ? AND user_id = ?');
+      ids.forEach((id, i) => up.run(i + 1, s.id, id));
+      promoteWaitlist(s.id); // s'il reste une place, la nouvelle première personne en profite
+      return { waiting: attendeesOf(s.id).waiting };
+    });
+  }, 'admin');
+  route('POST', '/api/admin/sessions/:id/waitlist/remove', async ({ params, body }) => {
+    q('DELETE FROM waitlist WHERE session_id = ? AND user_id = ?').run(params.id, int(body.user_id, 1, 1e12, 'Élève'));
+    return { waiting: attendeesOf(Number(params.id)).waiting };
+  }, 'admin');
 
   // ---------- Notifications sur le téléphone ----------
   route('GET', '/api/push/key', async () => ({ publicKey: vapidKeys().publicKey }), 'user');
@@ -691,6 +788,7 @@ function createApp(db, opts = {}) {
       assertBookable(s, user);
       assertQuota(user);
       const r = q("INSERT INTO bookings(session_id, user_id) VALUES (?, ?)").run(s.id, user.id);
+      clearWeekWaits(user.id, s.date, s.id);
       tellProf(user.id, s.id);
       return { booking_id: Number(r.lastInsertRowid), session: decorateSession(getSession(s.id), user), credits: creditsFor(user.id) };
     });
@@ -929,7 +1027,9 @@ function createApp(db, opts = {}) {
       ...makeups.map((m) => ({ ...m, kind: 'makeup' })),
     ];
     const absent = regulars.filter((r) => r.absence_id).map((r) => ({ ...r, kind: 'absent' }));
-    return { session: s, attendees, absent };
+    const waiting = q(`SELECT w.user_id AS id, w.created_at, u.name, u.email, u.phone FROM waitlist w JOIN users u ON u.id = w.user_id
+                       WHERE w.session_id = ? ORDER BY w.position, w.id`).all(s.id);
+    return { session: s, attendees, absent, waiting };
   }
   route('GET', '/api/admin/sessions/:id', async ({ params }) => attendeesOf(params.id), 'admin');
 
@@ -1006,6 +1106,7 @@ function createApp(db, opts = {}) {
         notified = all.length;
       }
     }
+    if (!f.cancelled) promoteWaitlist(s.id); // plus de places : la liste d'attente en profite
     return { session: decorateSession(getSession(s.id)), notified };
   }, 'admin');
 

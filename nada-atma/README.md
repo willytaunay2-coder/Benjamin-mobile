@@ -21,6 +21,11 @@ le change dans son profil. Le créneau peut être changé à tout moment depuis 
 autres élèves sont prévenus** (alerte 🔔 + e-mail) et le premier qui la prend l'a. Le cours n'est pas rattrapé.
 « Je viens finalement » rend la place tant que personne ne l'a prise.
 
+**Liste d'attente.** Sur un cours complet, l'élève (sans autre cours cette semaine-là) rejoint la liste d'attente, par
+ordre de demande. Quand une place se libère, la première personne disponible est inscrite automatiquement et prévenue ;
+l'alerte « place libre » ne part aux autres que si la liste est vide. La professeure voit la liste dans le détail de la
+séance, change l'ordre (flèches), ajoute ou retire quelqu'un ; ajouter des places fait aussi avancer la liste.
+
 ## Fonctionnalités
 
 Deux vues simples.

@@ -163,7 +163,7 @@
   }
 
   // ---------- Sauvegarde dans le navigateur ----------
-  const KEY = 'nada-atma-demo-v5';
+  const KEY = 'nada-atma-demo-v7';
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
   function save() {
@@ -211,12 +211,13 @@
       je18: ['Jade Boyer', 'Noé Garcia', 'Eva Chevalier', 'Sacha Robin', 'Mila Clément', 'Ethan Morin', 'Lou Nicolas', 'Clara Perrin', 'Maël Roche', 'Anna Gauthier'],
       je19: ['Enzo Blanchard', 'Lola Giraud', 'Timéo Joly', 'Margot Rivière', 'Robin Colin'],
       ve9: ['Agathe Lemaire', 'Simone Carré', 'Bernard Picard'],
+      none: ['Inès Roy', 'Paul Vidal'], // pas encore de créneau : elles prennent les places libres
     };
     const tok = {}; let n = 0;
     for (const [slot, names] of Object.entries(people)) for (const name of names) {
       n++; DEMO.cookie = DEMO.tokens.prof;
       const email = name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]+/g, '.') + '@exemple.fr';
-      const r = await api('POST', '/api/admin/users', { name, email, phone: `06 ${pad(10 + n)} 34 56 ${pad(10 + n)}`, template_id: T[slot].id, send_email: false });
+      const r = await api('POST', '/api/admin/users', { name, email, phone: `06 ${pad(10 + n)} 34 56 ${pad(10 + n)}`, template_id: T[slot] ? T[slot].id : null, send_email: false });
       DEMO.cookie = ''; await api('POST', '/api/login', { email, password: r.temp_password }); tok[name] = DEMO.cookie;
     }
     // Inscrit·es depuis la rentrée
@@ -242,7 +243,10 @@
     const ma12 = next(T.ma12.id), je18 = next(T.je18.id), ma20 = next(T.ma20.id);
     if (ma12) await as('Nina Blanc', `/api/sessions/${ma12.id}/release`);
     if (ma20) { await as('Rose Dupuis', `/api/sessions/${ma20.id}/release`); await as('Lina Mercier', `/api/sessions/${ma20.id}/book`); }
-    if (je18) await as('Jade Boyer', `/api/sessions/${je18.id}/release`);
+    // Le jeudi 18h30 reste complet : on peut y essayer la liste d'attente
+    // Le mardi 19h de Katia est complet : deux élèves attendent une place
+    const ma19 = next(T.ma19.id);
+    if (ma19) { await as('Inès Roy', `/api/sessions/${ma19.id}/waitlist`); await as('Paul Vidal', `/api/sessions/${ma19.id}/waitlist`); }
     DEMO.outbox = DEMO.outbox.filter((m) => /katia|prof@|^33612345678$|^33600000000$/.test(m.to)); // garder les messages des deux personnes de la démo
     DEMO.cookie = '';
     DEMO.seededOn = today;
