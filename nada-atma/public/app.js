@@ -593,10 +593,15 @@ function adminNav(active) {
 
 async function viewAdminSessions() {
   const p = hashParams();
-  const from = mondayOf(p.semaine || today());
-  setHashParams('#/admin', { semaine: from === mondayOf(today()) ? '' : from });
+  let from = mondayOf(p.semaine || today());
   loading();
-  const data = await api(`/api/sessions?from=${from}&to=${addDays(from, 6)}`);
+  let data = await api(`/api/sessions?from=${from}&to=${addDays(from, 6)}`);
+  // Le week-end (plus de séance à venir), afficher directement la semaine suivante
+  if (!p.semaine && !data.sessions.some((s) => !s.is_past)) {
+    from = addDays(from, 7);
+    data = await api(`/api/sessions?from=${from}&to=${addDays(from, 6)}`);
+  }
+  setHashParams('#/admin', { semaine: p.semaine ? from : '' });
   const total = data.sessions.filter((s) => !s.cancelled).reduce((a, s) => a + s.occupied, 0);
   $view.innerHTML = `
     ${adminNav('#/admin')}

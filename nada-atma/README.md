@@ -38,6 +38,13 @@ Deux vues simples.
 - **Vacances & fermetures** (vacances scolaires zone A/B/C, jours fériés sautés)
 - Écrans avancés toujours accessibles par adresse : `#/admin/annee`, `#/admin/repartition`, `#/admin/reglages`
 
+## Version d'essai (sans serveur)
+
+`npm run demo` construit `demo/nada-atma-essai.html` : une seule page qui fait tourner le vrai serveur
+dans le navigateur (SQLite via sql.js), avec des données de démonstration. On y entre côté élève (Katia Picquet)
+ou côté professeure, on passe de l'un à l'autre, et les e-mails arrivent dans une boîte de démonstration.
+Les essais restent dans le navigateur ; « Remettre la démo à zéro » repart de l'état initial.
+
 ## Démarrage
 
 Prérequis : **Node.js 22.13 ou plus récent**. Aucune autre dépendance (la base SQLite est intégrée à Node).
