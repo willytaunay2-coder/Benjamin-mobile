@@ -265,7 +265,7 @@ test('inscription d\'office à valider + alerte « place libre » à tous les é
   assert.ok(!bobNotifs.some((n) => n.kind === 'place'));
   assert.deepEqual(mailer.sent.map((m) => m.to), ['carol@example.com']); // Alice exclue, Bob déjà inscrit
   const profNotifs = (await admin('GET', '/api/notifications')).data.notifications;
-  assert.ok(profNotifs.some((n) => /Alice libère sa place/.test(n.title)));
+  assert.ok(profNotifs.some((n) => /Alice annule sa venue/.test(n.title)));
 
   // Marquer comme lu
   await carol('POST', '/api/notifications/read');

@@ -128,9 +128,9 @@ function createApp(db, opts = {}) {
     const recipients = q("SELECT id FROM users WHERE active = 1 AND role = 'member' AND id != ?").all(byUserId)
       .map((r) => r.id).filter((id) => !statusOf(s, id).status);
     notify(recipients, { kind: 'place', title: `Une place est libre ${when}`, link,
-      body: `Une place vient de se libérer pour le cours « ${s.title} » du ${when}${left > 1 ? ` (${left} places libres)` : ''}. Le premier ou la première qui réserve la prend.` });
+      body: `Une place vient de se libérer pour le cours « ${s.title} » du ${when}${left > 1 ? ` (${left} places libres)` : ''}. Le premier ou la première qui s’inscrit l’obtient.` });
     const who = q('SELECT name FROM users WHERE id = ?').get(byUserId)?.name || 'Quelqu\'un';
-    notify(adminIds().filter((id) => id !== byUserId), { kind: 'admin', title: `${who} libère sa place`, body: `${s.title}, ${when}.`, link: `#/admin?semaine=${link.split('=')[1]}` }, false);
+    notify(adminIds().filter((id) => id !== byUserId), { kind: 'admin', title: `${who} annule sa venue`, body: `${s.title}, ${when}.`, link: `#/admin?semaine=${link.split('=')[1]}` }, false);
   }
 
   function currentUser(req) {
@@ -506,7 +506,7 @@ function createApp(db, opts = {}) {
       if (s.cancelled) fail(409, 'Cette séance est annulée');
       if (D.sessionStart(s.date, s.start_time) <= now()) fail(409, 'Cette séance est déjà passée');
       const st = statusOf(s, user.id).status;
-      if (st === 'released') fail(409, 'Votre place est déjà libérée');
+      if (st === 'released') fail(409, 'Ce cours est déjà annulé');
       if (st !== 'enrolled') fail(409, 'Ce n\'est pas votre créneau');
       const hours = settingNum('cancel_deadline_hours');
       const inTime = D.sessionStart(s.date, s.start_time) - now() >= hours * 3600000;
@@ -596,7 +596,7 @@ function createApp(db, opts = {}) {
   route('POST', '/api/sessions/:id/book', async ({ params, user }) => {
     return tx(db, () => {
       const s = getSession(params.id);
-      if (statusOf(s, user.id).status === 'released') fail(409, 'C\'est votre créneau : utilisez « Je viens finalement »');
+      if (statusOf(s, user.id).status === 'released') fail(409, 'C\'est votre créneau : utilisez « Me réinscrire »');
       assertBookable(s, user);
       assertQuota(user);
       const r = q("INSERT INTO bookings(session_id, user_id) VALUES (?, ?)").run(s.id, user.id);
@@ -865,7 +865,7 @@ function createApp(db, opts = {}) {
       const ids = memberIds(); notified = ids.length;
       const when = `${longDate(ns.date)} à ${hhmm(ns.start_time)}`;
       announce(ids, 'new', `Nouvelle séance ${when}`,
-        `Une séance « ${ns.title} » est ajoutée le ${when}${ns.location ? ` (${ns.location})` : ''}. ${ns.capacity} places : réservez-la dans l'application.`, weekLink(ns.date));
+        `Une séance « ${ns.title} » est ajoutée le ${when}${ns.location ? ` (${ns.location})` : ''}. ${ns.capacity} places : inscrivez-vous dans l'application.`, weekLink(ns.date));
     }
     return { session: decorateSession(ns), notified };
   }, 'admin');

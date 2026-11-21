@@ -142,7 +142,7 @@
   }
 
   // ---------- Sauvegarde dans le navigateur ----------
-  const KEY = 'nada-atma-demo-v1';
+  const KEY = 'nada-atma-demo-v2';
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
   function save() {
@@ -174,11 +174,13 @@
       await api('POST', '/api/admin/closures', { label, start_date: a, end_date: b });
     }
     const today = iso(new Date());
-    const start = today > '2026-09-01' ? today : '2026-09-01';
+    // Saison commencée en septembre, comme dans la réalité
+    const now = new Date(); const sy = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+    const start = `${sy}-09-01`, end = `${sy + 1}-06-30`;
     const T = {};
     for (const [k, wd, h] of [['ma12', 2, '12:15'], ['ma19', 2, '19:00'], ['ma20', 2, '20:15'], ['je12', 4, '12:15'], ['je18', 4, '18:30'], ['je19', 4, '19:45'], ['ve9', 5, '09:00']]) {
       T[k] = (await api('POST', '/api/admin/templates', { title: 'Cours de yoga', description: 'Un doux mélange de Yin yoga, Yoga thérapie, Hatha yoga et Yoga du son, saupoudré de sonothérapie.',
-        weekday: wd, start_time: h, duration_min: 60, capacity: 12, location: 'L’espace des possibles, Miribel', start_date: start, end_date: '2027-06-30' })).template;
+        weekday: wd, start_time: h, duration_min: 60, capacity: 12, location: 'L’espace des possibles, Miribel', start_date: start, end_date: end })).template;
     }
     const people = {
       ma19: ['Claire Dupont', 'Marie Bernard', 'Sophie Laurent', 'Thomas Roux', 'Anne Fontaine', 'Julie Morel', 'Paul Garnier', 'Léa Petit', 'Camille Faure', 'Hugo Martin', 'Emma Girard'],
@@ -196,6 +198,8 @@
       const r = await api('POST', '/api/admin/users', { name, email, phone: `06 ${pad(10 + n)} 34 56 ${pad(10 + n)}`, template_id: T[slot].id, send_email: false });
       DEMO.cookie = ''; await api('POST', '/api/login', { email, password: r.temp_password }); tok[name] = DEMO.cookie;
     }
+    // Inscrit·es depuis la rentrée
+    DEMO.db.prepare('UPDATE enrollments SET start_date = (SELECT t.start_date FROM templates t WHERE t.id = enrollments.template_id)').run();
     DEMO.cookie = DEMO.tokens.prof;
     const katia = await api('POST', '/api/admin/users', { name: 'Katia Picquet', email: 'katia.picquet@exemple.fr', phone: '06 12 34 56 78', template_id: T.ma19.id });
     DEMO.katiaPassword = katia.temp_password;
