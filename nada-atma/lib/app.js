@@ -274,8 +274,9 @@ function createApp(db, opts = {}) {
       const st = statusOf(s, user.id);
       out.my_status = st.status;
       out.my_booking_id = st.booking_id;
-      out.my_wait_pos = waitPosition(s.id, user.id);
+      out.my_waiting = !!waitPosition(s.id, user.id); // l'élève sait seulement qu'il ou elle attend, pas son rang
     }
+    if (!user || user.role !== 'admin') delete out.waiting_count; // la taille de la liste reste côté professeure
     return out;
   }
 
@@ -703,7 +704,7 @@ function createApp(db, opts = {}) {
       const pos = waitPosition(s.id, user.id);
       const when = `${longDate(s.date)} à ${hhmm(s.start_time)}`;
       notify(adminIds(), { kind: 'admin', title: `${user.name} en liste d’attente ${when}`, body: `${s.title} : n° ${pos} sur la liste.`, link: `#/admin/jour?date=${s.date}` }, false);
-      return { position: pos, session: decorateSession(getSession(s.id), user) };
+      return { waiting: true, session: decorateSession(getSession(s.id), user) };
     });
   }, 'user');
   route('POST', '/api/sessions/:id/waitlist/leave', async ({ params, user }) => {

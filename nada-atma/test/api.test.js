@@ -570,13 +570,16 @@ test('liste d’attente : par ordre de demande, ordre modifiable par la professe
   // Complet : on ne peut pas s'inscrire, mais on peut rejoindre la liste
   assert.equal((await C.Eve('POST', `/api/sessions/${tue.id}/book`)).status, 409);
   let r = await C.Eve('POST', `/api/sessions/${tue.id}/waitlist`);
-  assert.equal(r.status, 200); assert.equal(r.data.position, 1);
-  assert.equal((await C.Fay('POST', `/api/sessions/${tue.id}/waitlist`)).data.position, 2);
+  assert.equal(r.status, 200); assert.equal(r.data.waiting, true);
+  assert.equal((await C.Fay('POST', `/api/sessions/${tue.id}/waitlist`)).status, 200);
+  // L'ordre n'est visible que par la professeure
+  assert.deepEqual((await admin('GET', `/api/admin/sessions/${tue.id}`)).data.waiting.map((w) => w.name), ['Eve', 'Fay']);
   assert.equal((await C.Fay('POST', `/api/sessions/${tue.id}/waitlist`)).status, 409);
   assert.match((await C.Bob('POST', `/api/sessions/${tue.id}/waitlist`)).data.error, /Un cours par semaine/); // Bob a son jeudi
   assert.equal((await admin('POST', `/api/sessions/${tue.id}/waitlist`)).status, 403);
   const seen = (await C.Fay('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0];
-  assert.equal(seen.my_wait_pos, 2); assert.equal(seen.waiting_count, 2);
+  assert.equal(seen.my_waiting, true); assert.equal(seen.my_wait_pos, undefined); assert.equal(seen.waiting_count, undefined);
+  assert.equal((await admin('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0].waiting_count, 2);
   assert.ok((await admin('GET', '/api/notifications')).data.notifications.some((n) => /Eve en liste d’attente mardi 8 septembre/.test(n.title)));
 
   // La professeure change l'ordre : Fay passe devant
@@ -587,9 +590,9 @@ test('liste d’attente : par ordre de demande, ordre modifiable par la professe
   // Alice annule : Fay est inscrite d'office, Eve devient n° 1, personne d'autre n'est alerté
   await C.Alice('POST', `/api/sessions/${tue.id}/release`);
   let s = (await C.Fay('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0];
-  assert.equal(s.my_status, 'booked'); assert.equal(s.my_wait_pos, null);
+  assert.equal(s.my_status, 'booked'); assert.equal(s.my_waiting, false);
   assert.match((await C.Fay('GET', '/api/notifications')).data.notifications[0].title, /Vous êtes inscrit·e mardi 8 septembre à 19h/);
-  assert.equal((await C.Eve('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0].my_wait_pos, 1);
+  assert.deepEqual((await admin('GET', `/api/admin/sessions/${tue.id}`)).data.waiting.map((w) => w.name), ['Eve']);
   assert.ok(!(await C.Eve('GET', '/api/notifications')).data.notifications.some((n) => /Une place est libre/.test(n.title)));
   const profN = (await admin('GET', '/api/notifications')).data.notifications.map((n) => n.title);
   assert.ok(profN.includes('Fay passe de la liste d’attente au cours du mardi 8 septembre à 19h'));
@@ -598,7 +601,7 @@ test('liste d’attente : par ordre de demande, ordre modifiable par la professe
   // Fay annule à son tour : Eve est inscrite
   await C.Fay('POST', `/api/bookings/${s.my_booking_id}/cancel`);
   s = (await C.Eve('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0];
-  assert.equal(s.my_status, 'booked'); assert.equal(s.waiting_count, 0);
+  assert.equal(s.my_status, 'booked'); assert.equal((await admin('GET', `/api/admin/sessions/${tue.id}`)).data.waiting.length, 0);
 
   // La professeure peut ajouter puis retirer quelqu'un ; une place en plus profite à la liste
   await admin('POST', `/api/admin/sessions/${tue.id}/waitlist`, { user_id: ID.Fay });

@@ -313,7 +313,7 @@ function memberAction(s) {
   if (s.my_status === 'booked') {
     return `<span class="badge ok">Inscrit·e</span><button class="btn ghost small" data-manage="${s.id}">Annuler</button>`;
   }
-  if (s.my_wait_pos) return `<span class="badge warn">Liste d’attente · n° ${s.my_wait_pos}</span><button class="btn ghost small" data-unwait="${s.id}">Quitter la liste</button>`;
+  if (s.my_waiting) return `<span class="badge warn">Sur liste d’attente</span><button class="btn ghost small" data-unwait="${s.id}">Quitter la liste</button>`;
   if (s.spots_left <= 0) return weekTaken ? '<span class="badge plum">Complet</span>' : `<span class="badge plum">Complet</span><button class="btn secondary small" data-wait="${s.id}">Liste d’attente</button>`;
   if (weekTaken) return '<span class="small muted week-taken">Déjà un cours cette semaine</span>';
   return `<button class="btn small" data-book="${s.id}">S’inscrire</button>`;
@@ -408,12 +408,11 @@ function confirmWait(s, after) {
       <div class="day-time"><strong>${hm(s.start_time)}</strong><span>${hm(endTime(s.start_time, s.duration_min))}</span></div>
       <div><strong>${cap(fmtFull(s.date))}</strong><div class="small muted">${esc(s.title)} · complet</div></div>
     </div>
-    <p>Vous seriez <strong>n° ${(s.waiting_count || 0) + 1}</strong> sur la liste.</p>
-    <p class="small muted">Si une place se libère, la première personne de la liste est inscrite automatiquement et prévenue par notification. Vous pouvez quitter la liste à tout moment.</p>
+    <p class="small muted">Ce cours est complet. Si une place se libère, une personne de la liste d’attente est inscrite automatiquement et prévenue par notification. Vous pouvez quitter la liste à tout moment.</p>
     <div class="btn-row" style="margin-top:14px"><button class="btn" id="confirm-wait">Rejoindre la liste</button><button class="btn ghost" data-close>Retour</button></div>`, (m, close) => {
     m.querySelector('#confirm-wait').onclick = async (e) => {
       e.target.disabled = true;
-      try { const r = await api(`/api/sessions/${s.id}/waitlist`, { method: 'POST' }); close(); toast(`Vous êtes n° ${r.position} sur la liste d’attente`); afterChange(after); }
+      try { await api(`/api/sessions/${s.id}/waitlist`, { method: 'POST' }); close(); toast('Vous êtes sur la liste d’attente'); afterChange(after); }
       catch (err) { close(); toast(err.message, true); }
     };
   });
