@@ -103,24 +103,87 @@ function createApp(db, opts = {}) {
   }
 
   // ---------- Séances ----------
+  // Une inscription à l'année « couvre » une séance si elle porte sur le même cours régulier
+  // et que la date de la séance est dans sa période.
+  const COVERS = `e.template_id = s.template_id AND e.start_date <= s.date AND (e.end_date IS NULL OR e.end_date >= s.date)`;
   const SESSION_SELECT = `
     SELECT s.*,
+      (SELECT COUNT(*) FROM enrollments e WHERE ${COVERS}) AS enrolled_count,
+      (SELECT COUNT(*) FROM absences a JOIN enrollments e ON e.user_id = a.user_id
+         WHERE a.session_id = s.id AND ${COVERS}) AS absent_count,
       (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'booked') AS booked_count
     FROM sessions s`;
 
+  const occupiedOf = (s) => s.enrolled_count - s.absent_count + s.booked_count;
+
+  function isEnrolledOn(s, userId) {
+    return !!q(`SELECT 1 FROM enrollments e, sessions s WHERE s.id = ? AND e.user_id = ? AND ${COVERS}`).get(s.id, userId);
+  }
+  function absenceOf(s, userId) {
+    return q('SELECT * FROM absences WHERE session_id = ? AND user_id = ?').get(s.id, userId);
+  }
+
+  // Statut d'une personne sur une séance : 'enrolled' (son créneau), 'released' (place libérée),
+  // 'booked' (rattrapage / réservation ponctuelle) ou null.
+  function statusOf(s, userId) {
+    const b = q("SELECT id FROM bookings WHERE session_id = ? AND user_id = ? AND status = 'booked'").get(s.id, userId);
+    if (b) return { status: 'booked', booking_id: b.id };
+    if (isEnrolledOn(s, userId)) return { status: absenceOf(s, userId) ? 'released' : 'enrolled', booking_id: null };
+    return { status: null, booking_id: null };
+  }
+
   function decorateSession(s, user) {
     const start = D.sessionStart(s.date, s.start_time);
+    const occupied = occupiedOf(s);
     const out = {
       ...s,
       cancelled: !!s.cancelled,
-      spots_left: Math.max(0, s.capacity - s.booked_count),
+      occupied,
+      spots_left: Math.max(0, s.capacity - occupied),
       is_past: start <= now(),
     };
     if (user) {
-      const b = q("SELECT id FROM bookings WHERE session_id = ? AND user_id = ? AND status = 'booked'").get(s.id, user.id);
-      out.my_booking_id = b ? b.id : null;
+      const st = statusOf(s, user.id);
+      out.my_status = st.status;
+      out.my_booking_id = st.booking_id;
     }
     return out;
+  }
+
+  // Crédits de rattrapage = places libérées à temps + séances de son créneau annulées par la professeure
+  //                        + ajustement manuel − rattrapages réservés (sur des séances non annulées)
+  function creditsFor(userId) {
+    const earned = q(`SELECT COUNT(*) n FROM sessions s JOIN enrollments e ON e.user_id = ? AND ${COVERS}
+                      LEFT JOIN absences a ON a.session_id = s.id AND a.user_id = e.user_id
+                      WHERE (a.id IS NOT NULL AND a.with_credit = 1)
+                         OR (s.cancelled = 1 AND s.closure_id IS NULL)`).get(userId).n;
+    const used = q(`SELECT COUNT(*) n FROM bookings b JOIN sessions s ON s.id = b.session_id
+                    WHERE b.user_id = ? AND b.status = 'booked' AND s.cancelled = 0`).get(userId).n;
+    const adj = q('SELECT credit_adjust FROM users WHERE id = ?').get(userId)?.credit_adjust || 0;
+    return earned + adj - used;
+  }
+
+  function enrollmentsOf(userId) {
+    return q(`SELECT e.id, e.template_id, e.start_date, e.end_date, t.title, t.weekday, t.start_time, t.duration_min, t.location, t.color
+              FROM enrollments e JOIN templates t ON t.id = e.template_id
+              WHERE e.user_id = ? AND (e.end_date IS NULL OR e.end_date >= ?) ORDER BY t.weekday, t.start_time`).all(userId, D.toISO(now()));
+  }
+
+  // Inscrit·es à l'année actuellement sur un créneau
+  const activeEnrolledCount = (templateId) =>
+    q('SELECT COUNT(*) n FROM enrollments WHERE template_id = ? AND end_date IS NULL').get(templateId).n;
+
+  function enroll(t, userId) {
+    if (q('SELECT 1 FROM enrollments WHERE template_id = ? AND user_id = ? AND end_date IS NULL').get(t.id, userId)) {
+      fail(409, 'Déjà inscrit·e sur ce créneau');
+    }
+    if (activeEnrolledCount(t.id) >= t.capacity) fail(409, 'Ce créneau est complet pour l\'année');
+    // Démarre après la dernière séance déjà pleine (rattrapages déjà réservés), pour ne pas surbooker
+    let start = D.toISO(now()) > t.start_date ? D.toISO(now()) : t.start_date;
+    const future = q(`${SESSION_SELECT} WHERE s.template_id = ? AND s.date >= ? AND s.cancelled = 0 ORDER BY s.date`).all(t.id, start);
+    for (const s of future) if (occupiedOf(s) >= s.capacity) start = D.addDays(s.date, 1);
+    const r = q('INSERT INTO enrollments(template_id, user_id, start_date) VALUES (?,?,?)').run(t.id, userId, start);
+    return { enrollment_id: Number(r.lastInsertRowid), start_date: start };
   }
 
   function getSession(id) {
@@ -138,9 +201,18 @@ function createApp(db, opts = {}) {
     if (!ignoreHorizon && horizon > 0 && start - now() > horizon * 86400000) {
       fail(409, `Les réservations ouvrent ${horizon} jours avant la séance`);
     }
-    if (s.booked_count >= s.capacity) fail(409, 'Cette séance est complète');
-    const mine = q("SELECT 1 FROM bookings WHERE session_id = ? AND user_id = ? AND status = 'booked'").get(s.id, user.id);
-    if (mine) fail(409, 'Vous êtes déjà inscrit·e à cette séance');
+    const st = statusOf(s, user.id).status;
+    if (st === 'booked') fail(409, 'Vous êtes déjà inscrit·e à cette séance');
+    if (st === 'enrolled') fail(409, 'C\'est déjà votre créneau : votre place vous attend');
+    if (occupiedOf(s) >= s.capacity) fail(409, 'Cette séance est complète');
+  }
+
+  // Un rattrapage consomme un crédit (si la règle est active)
+  function assertCredit(user, extra = 0) {
+    if (settings().makeup_requires_credit !== '1') return;
+    if (creditsFor(user.id) + extra <= 0) {
+      fail(409, 'Vous n\'avez pas de rattrapage disponible. Libérez d\'abord une place sur votre créneau.');
+    }
   }
 
   function assertChangeable(s, isAdmin) {
@@ -242,11 +314,103 @@ function createApp(db, opts = {}) {
     return { ok: true };
   });
 
-  route('GET', '/api/me', async ({ user }) => ({
-    user: publicUser(user),
-    settings: (({ studio_name, cancel_deadline_hours, booking_horizon_days, max_active_bookings }) =>
-      ({ studio_name, cancel_deadline_hours: Number(cancel_deadline_hours), booking_horizon_days: Number(booking_horizon_days), max_active_bookings: Number(max_active_bookings) }))(settings()),
+  route('GET', '/api/me', async ({ user }) => {
+    const st = settings();
+    return {
+      user: publicUser(user),
+      credits: user ? creditsFor(user.id) : 0,
+      enrollments: user ? enrollmentsOf(user.id) : [],
+      settings: {
+        studio_name: st.studio_name,
+        cancel_deadline_hours: Number(st.cancel_deadline_hours),
+        booking_horizon_days: Number(st.booking_horizon_days),
+        max_active_bookings: Number(st.max_active_bookings),
+        makeup_requires_credit: st.makeup_requires_credit === '1',
+        allow_self_enroll: st.allow_self_enroll === '1',
+      },
+    };
+  });
+
+  // Créneaux à l'année proposés (pour choisir le sien)
+  route('GET', '/api/templates', async ({ user }) => ({
+    templates: q('SELECT * FROM templates WHERE active = 1 AND end_date >= ? ORDER BY weekday, start_time').all(D.toISO(now())).map((t) => {
+      const enrolled = activeEnrolledCount(t.id);
+      return {
+        id: t.id, title: t.title, description: t.description, weekday: t.weekday, start_time: t.start_time,
+        duration_min: t.duration_min, location: t.location, color: t.color, capacity: t.capacity,
+        start_date: t.start_date, end_date: t.end_date, enrolled, free: Math.max(0, t.capacity - enrolled),
+        mine: !!(user && q('SELECT 1 FROM enrollments WHERE template_id = ? AND user_id = ? AND end_date IS NULL').get(t.id, user.id)),
+      };
+    }),
   }));
+
+  route('POST', '/api/templates/:id/enroll', async ({ params, user }) => {
+    if (settings().allow_self_enroll !== '1') fail(403, 'L\'inscription à l\'année se fait auprès de la professeure');
+    const t = q('SELECT * FROM templates WHERE id = ? AND active = 1').get(params.id) || fail(404, 'Créneau introuvable');
+    return tx(db, () => enroll(t, user.id));
+  }, 'user');
+
+  // « Je ne viens pas » : libère sa place sur son créneau
+  route('POST', '/api/sessions/:id/release', async ({ params, user }) => {
+    return tx(db, () => {
+      const s = getSession(params.id);
+      if (s.cancelled) fail(409, 'Cette séance est annulée');
+      if (D.sessionStart(s.date, s.start_time) <= now()) fail(409, 'Cette séance est déjà passée');
+      const st = statusOf(s, user.id).status;
+      if (st === 'released') fail(409, 'Votre place est déjà libérée');
+      if (st !== 'enrolled') fail(409, 'Ce n\'est pas votre créneau');
+      const hours = settingNum('cancel_deadline_hours');
+      const inTime = D.sessionStart(s.date, s.start_time) - now() >= hours * 3600000;
+      q('INSERT INTO absences(session_id, user_id, with_credit) VALUES (?,?,?)').run(s.id, user.id, inTime ? 1 : 0);
+      return { ok: true, with_credit: inTime, credits: creditsFor(user.id) };
+    });
+  }, 'user');
+
+  // « Je viens finalement » : reprend sa place si elle n'a pas été prise
+  route('POST', '/api/sessions/:id/unrelease', async ({ params, user }) => {
+    return tx(db, () => {
+      const s = getSession(params.id);
+      const a = absenceOf(s, user.id) || fail(404, 'Aucune place libérée sur cette séance');
+      if (D.sessionStart(s.date, s.start_time) <= now()) fail(409, 'Cette séance est déjà passée');
+      if (occupiedOf(s) >= s.capacity) fail(409, 'Votre place a été prise entre-temps. Choisissez un autre créneau.');
+      if (a.with_credit && settings().makeup_requires_credit === '1' && creditsFor(user.id) <= 0) {
+        fail(409, 'Le rattrapage obtenu a déjà été utilisé : annulez-le d\'abord');
+      }
+      q('DELETE FROM absences WHERE id = ?').run(a.id);
+      return { ok: true, credits: creditsFor(user.id) };
+    });
+  }, 'user');
+
+  // Déplacer : libère sa place (créneau) ou sa réservation, et réserve une autre séance, en une fois
+  route('POST', '/api/sessions/:id/swap', async ({ params, user, body }) => {
+    return tx(db, () => {
+      const from = getSession(params.id);
+      const target = getSession(int(body.target_session_id, 1, 1e12, 'Séance cible'));
+      if (target.id === from.id) fail(400, 'Choisissez une autre séance');
+      const st = statusOf(from, user.id);
+      if (st.status === 'booked') {
+        if (!from.cancelled) assertChangeable(from, false);
+        q("UPDATE bookings SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?").run(st.booking_id);
+      } else if (st.status === 'enrolled' || st.status === 'released') {
+        if (!from.cancelled && st.status === 'enrolled') assertChangeable(from, false);
+        if (st.status === 'enrolled') q('INSERT INTO absences(session_id, user_id, with_credit) VALUES (?,?,1)').run(from.id, user.id);
+      } else if (!(from.cancelled && isEnrolledOn(from, user.id))) {
+        fail(409, 'Vous n\'êtes pas inscrit·e à cette séance');
+      }
+      const t2 = getSession(target.id);
+      if (statusOf(t2, user.id).status === 'released') {
+        // revenir sur son propre créneau
+        if (occupiedOf(t2) >= t2.capacity) fail(409, 'Cette séance est complète');
+        q('DELETE FROM absences WHERE session_id = ? AND user_id = ?').run(t2.id, user.id);
+      } else {
+        assertBookable(t2, user);
+        assertCredit(user);
+        assertQuota(user);
+        q('INSERT INTO bookings(session_id, user_id) VALUES (?, ?)').run(t2.id, user.id);
+      }
+      return { session: decorateSession(getSession(t2.id), user), credits: creditsFor(user.id) };
+    });
+  }, 'user');
 
   route('PUT', '/api/me', async ({ user, body }) => {
     const name = str(body.name, 100) || user.name;
@@ -270,23 +434,26 @@ function createApp(db, opts = {}) {
     return { from, to, sessions: rows.map((s) => decorateSession(s, user)), closures };
   });
 
-  // Réservations du membre
-  route('GET', '/api/my/bookings', async ({ user }) => {
-    const rows = q(`SELECT b.id AS booking_id, b.created_at AS booked_at, s.*,
-        (SELECT COUNT(*) FROM bookings x WHERE x.session_id = s.id AND x.status = 'booked') AS booked_count
-      FROM bookings b JOIN sessions s ON s.id = b.session_id
-      WHERE b.user_id = ? AND b.status = 'booked'
-      ORDER BY s.date, s.start_time`).all(user.id);
-    return { bookings: rows.map((s) => ({ ...decorateSession(s), booking_id: s.booking_id })) };
+  // Séances du membre (son créneau + rattrapages) sur une période
+  route('GET', '/api/my/sessions', async ({ user, query }) => {
+    const from = D.isValidDate(query.from) ? query.from : D.addDays(D.toISO(now()), -60);
+    const to = D.isValidDate(query.to) ? query.to : D.addDays(D.toISO(now()), 70);
+    const rows = q(`${SESSION_SELECT} WHERE s.date BETWEEN ? AND ? AND (
+        EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id AND b.user_id = ? AND b.status = 'booked')
+        OR EXISTS (SELECT 1 FROM enrollments e WHERE e.user_id = ? AND ${COVERS}))
+      ORDER BY s.date, s.start_time`).all(from, to, user.id, user.id);
+    return { sessions: rows.map((s) => decorateSession(s, user)), credits: creditsFor(user.id), enrollments: enrollmentsOf(user.id) };
   }, 'user');
 
   route('POST', '/api/sessions/:id/book', async ({ params, user }) => {
     return tx(db, () => {
       const s = getSession(params.id);
+      if (statusOf(s, user.id).status === 'released') fail(409, 'C\'est votre créneau : utilisez « Je viens finalement »');
       assertBookable(s, user);
+      assertCredit(user);
       assertQuota(user);
       const r = q("INSERT INTO bookings(session_id, user_id) VALUES (?, ?)").run(s.id, user.id);
-      return { booking_id: Number(r.lastInsertRowid), session: decorateSession(getSession(s.id), user) };
+      return { booking_id: Number(r.lastInsertRowid), session: decorateSession(getSession(s.id), user), credits: creditsFor(user.id) };
     });
   }, 'user');
 
@@ -341,9 +508,53 @@ function createApp(db, opts = {}) {
   }
 
   route('GET', '/api/admin/templates', async () => ({
-    templates: q(`SELECT t.*, (SELECT COUNT(*) FROM sessions s WHERE s.template_id = t.id AND s.date >= ?) AS upcoming_sessions
+    templates: q(`SELECT t.*, (SELECT COUNT(*) FROM sessions s WHERE s.template_id = t.id AND s.date >= ?) AS upcoming_sessions,
+                    (SELECT COUNT(*) FROM enrollments e WHERE e.template_id = t.id AND e.end_date IS NULL) AS enrolled
                   FROM templates t ORDER BY t.weekday, t.start_time`).all(D.toISO(now())),
   }), 'admin');
+
+  // Inscrit·es à l'année d'un créneau
+  route('GET', '/api/admin/templates/:id/enrollments', async ({ params }) => ({
+    enrollments: q(`SELECT e.id, e.start_date, u.id AS user_id, u.name, u.email, u.phone
+                    FROM enrollments e JOIN users u ON u.id = e.user_id
+                    WHERE e.template_id = ? AND e.end_date IS NULL ORDER BY u.name COLLATE NOCASE`).all(params.id),
+  }), 'admin');
+
+  route('POST', '/api/admin/templates/:id/enrollments', async ({ params, body }) => {
+    const t = q('SELECT * FROM templates WHERE id = ?').get(params.id) || fail(404, 'Cours introuvable');
+    const u = q('SELECT * FROM users WHERE id = ?').get(int(body.user_id, 1, 1e12, 'Membre')) || fail(404, 'Membre introuvable');
+    return tx(db, () => enroll(t, u.id));
+  }, 'admin');
+
+  // Fin d'inscription à l'année (l'historique est conservé)
+  route('DELETE', '/api/admin/enrollments/:id', async ({ params }) => {
+    const e = q('SELECT * FROM enrollments WHERE id = ? AND end_date IS NULL').get(params.id) || fail(404, 'Inscription introuvable');
+    return tx(db, () => {
+      const today = D.toISO(now());
+      const end = e.start_date > D.addDays(today, -1) ? null : D.addDays(today, -1);
+      if (end) q('UPDATE enrollments SET end_date = ? WHERE id = ?').run(end, e.id);
+      else q('DELETE FROM enrollments WHERE id = ?').run(e.id); // jamais commencée
+      q(`DELETE FROM absences WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE template_id = ? AND date >= ?)`)
+        .run(e.user_id, e.template_id, today);
+      return { ok: true };
+    });
+  }, 'admin');
+
+  // L'admin note une absence (avec crédit) ou l'annule
+  route('POST', '/api/admin/sessions/:id/absences', async ({ params, body }) => {
+    const s = getSession(params.id);
+    const uid = int(body.user_id, 1, 1e12, 'Membre');
+    if (statusOf(s, uid).status !== 'enrolled') fail(409, 'Cette personne n\'est pas attendue sur cette séance');
+    q('INSERT INTO absences(session_id, user_id, with_credit) VALUES (?,?,1)').run(s.id, uid);
+    return { ok: true };
+  }, 'admin');
+
+  route('DELETE', '/api/admin/sessions/:id/absences/:uid', async ({ params }) => {
+    const s = getSession(params.id);
+    if (occupiedOf(s) >= s.capacity) fail(409, 'La place a été reprise par quelqu\'un d\'autre');
+    q('DELETE FROM absences WHERE session_id = ? AND user_id = ?').run(s.id, params.uid);
+    return { ok: true };
+  }, 'admin');
 
   route('POST', '/api/admin/templates', async ({ body }) => {
     const f = templateFields(body);
@@ -463,10 +674,20 @@ function createApp(db, opts = {}) {
   // Séances
   route('GET', '/api/admin/sessions/:id', async ({ params }) => {
     const s = decorateSession(getSession(params.id));
-    const attendees = q(`SELECT b.id AS booking_id, b.created_at AS booked_at, u.id, u.name, u.email, u.phone
-                         FROM bookings b JOIN users u ON u.id = b.user_id
-                         WHERE b.session_id = ? AND b.status = 'booked' ORDER BY b.created_at`).all(s.id);
-    return { session: s, attendees };
+    // Inscrit·es à l'année (présent·es ou absent·es) + rattrapages / réservations ponctuelles
+    const regulars = q(`SELECT u.id, u.name, u.email, u.phone, a.id AS absence_id
+                        FROM enrollments e JOIN sessions s ON s.id = ? JOIN users u ON u.id = e.user_id
+                        LEFT JOIN absences a ON a.session_id = s.id AND a.user_id = u.id
+                        WHERE ${COVERS} ORDER BY u.name COLLATE NOCASE`).all(s.id);
+    const makeups = q(`SELECT b.id AS booking_id, u.id, u.name, u.email, u.phone
+                       FROM bookings b JOIN users u ON u.id = b.user_id
+                       WHERE b.session_id = ? AND b.status = 'booked' ORDER BY b.created_at`).all(s.id);
+    const attendees = [
+      ...regulars.filter((r) => !r.absence_id).map((r) => ({ ...r, kind: 'regular' })),
+      ...makeups.map((m) => ({ ...m, kind: 'makeup' })),
+    ];
+    const absent = regulars.filter((r) => r.absence_id).map((r) => ({ ...r, kind: 'absent' }));
+    return { session: s, attendees, absent };
   }, 'admin');
 
   route('POST', '/api/admin/sessions', async ({ body }) => {
@@ -500,7 +721,7 @@ function createApp(db, opts = {}) {
 
   route('DELETE', '/api/admin/sessions/:id', async ({ params }) => {
     const s = getSession(params.id);
-    if (s.booked_count > 0) fail(409, 'Des personnes sont inscrites : annulez la séance plutôt que de la supprimer');
+    if (occupiedOf(s) > 0) fail(409, 'Des personnes sont inscrites : annulez la séance plutôt que de la supprimer');
     q('DELETE FROM sessions WHERE id = ?').run(s.id);
     return { ok: true };
   }, 'admin');
@@ -521,8 +742,19 @@ function createApp(db, opts = {}) {
     users: q(`SELECT u.*, (SELECT COUNT(*) FROM bookings b JOIN sessions s ON s.id = b.session_id
                 WHERE b.user_id = u.id AND b.status = 'booked' AND s.date >= ?) AS upcoming
               FROM users u ORDER BY u.name COLLATE NOCASE`).all(D.toISO(now()))
-      .map((u) => ({ ...publicUser(u), upcoming: u.upcoming })),
+      .map((u) => ({
+        ...publicUser(u), upcoming: u.upcoming, credits: creditsFor(u.id),
+        slots: enrollmentsOf(u.id).map((e) => `${['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'][e.weekday]} ${e.start_time.replace(':', 'h')} ${e.title}`),
+      })),
   }), 'admin');
+
+  // Ajuster les crédits de rattrapage d'un membre (+1 / −1, carnet offert…)
+  route('POST', '/api/admin/users/:id/credits', async ({ params, body }) => {
+    const u = q('SELECT * FROM users WHERE id = ?').get(params.id) || fail(404, 'Membre introuvable');
+    const delta = int(body.delta, -100, 100, 'Ajustement');
+    q('UPDATE users SET credit_adjust = credit_adjust + ? WHERE id = ?').run(delta, u.id);
+    return { credits: creditsFor(u.id) };
+  }, 'admin');
 
   route('PUT', '/api/admin/users/:id', async ({ params, body, user }) => {
     const u = q('SELECT * FROM users WHERE id = ?').get(params.id) || fail(404, 'Membre introuvable');
@@ -549,6 +781,8 @@ function createApp(db, opts = {}) {
     if (body.booking_horizon_days !== undefined) up.run(String(int(body.booking_horizon_days, 0, 800, 'Ouverture')), 'booking_horizon_days');
     if (body.max_active_bookings !== undefined) up.run(String(int(body.max_active_bookings, 0, 1000, 'Limite')), 'max_active_bookings');
     if (body.skip_public_holidays !== undefined) up.run(body.skip_public_holidays ? '1' : '0', 'skip_public_holidays');
+    if (body.makeup_requires_credit !== undefined) up.run(body.makeup_requires_credit ? '1' : '0', 'makeup_requires_credit');
+    if (body.allow_self_enroll !== undefined) up.run(body.allow_self_enroll ? '1' : '0', 'allow_self_enroll');
     return { settings: settings() };
   }, 'admin');
 

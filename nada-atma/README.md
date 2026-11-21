@@ -8,28 +8,37 @@ C'est une **application web installable** (PWA) : elle s'utilise dans un navigat
 iPhone/Android comme une application (Safari → Partager → « Sur l'écran d'accueil » ; Chrome → ⋮ → « Installer »).
 Une seule version à maintenir, pas besoin de passer par l'App Store.
 
+## Fonctionnement
+
+**Un créneau à l'année.** En début de saison, chaque élève s'inscrit sur son créneau (ex. « Hatha yoga, mardi
+18h30 ») : sa place est réservée toutes les semaines, hors vacances.
+
+**« Je ne viens pas » → ma place est disponible.** Si l'élève ne peut pas venir, il libère sa place en un clic :
+elle devient libre pour les autres, et il gagne **un rattrapage** (s'il prévient au moins 12 h avant, délai réglable).
+
+**Rattrapage sur un créneau libre.** Avec ce rattrapage, il réserve n'importe quelle place libre du planning,
+ou utilise directement « Venir un autre jour » (libération + réservation en une seule fois).
+Une séance annulée par la professeure donne aussi un rattrapage ; pas les vacances.
+
 ## Fonctionnalités
 
 **Pour les élèves**
-- Planning semaine par semaine, consultable sans compte, filtre par type de cours
-- Création de compte (nom, e-mail, téléphone, mot de passe)
-- Réservation en un clic, affichage des places restantes
-- « Mes séances » : déplacer un rendez-vous vers une autre séance (même cours ou non) ou l'annuler
-- Délai limite de modification (par défaut 12 h avant la séance)
-- Séance annulée par la professeure → signalée dans « Mes séances » avec un bouton pour la déplacer
+- Choix de son créneau à l'année (places limitées par créneau) — ou inscription par la professeure
+- Planning semaine par semaine (consultable sans compte), filtre par cours, places libres affichées
+- « Je ne viens pas » / « Je viens finalement » (si la place n'a pas été reprise entre-temps)
+- Compteur de rattrapages, réservation d'une place libre, déplacement ou annulation d'un rattrapage
+- « Mes séances » : mon créneau, mes rattrapages, mes prochaines séances, historique
 
 **Pour la professeure (onglet « Gestion »)**
-- **Cours réguliers** : ex. « Hatha yoga, mardi 18h30, 75 min, 12 places, de septembre à juillet » → toutes les séances
-  de l'année sont créées automatiquement
-- **Vacances & fermetures** : une période sans cours annule les séances concernées (et les rétablit si on la supprime).
-  Import en un clic des **vacances scolaires officielles** (zone A, B ou C), et jours fériés sautés automatiquement
-- **Vue annuelle** : toute la saison (septembre → août) sur un écran, vacances hachurées, jours complets en couleur
-- **Vue semaine** : nombre d'inscrit·es par séance, liste des participant·es avec téléphone, inscrire ou retirer quelqu'un,
-  modifier/annuler une séance, e-mail groupé aux inscrit·es
-- **Séances ponctuelles** : ateliers, stages, cours exceptionnels
-- **Membres** : liste, recherche, historique, désactivation, droits administrateur
-- **Réglages** : délai d'annulation, ouverture des réservations (ex. 120 jours à l'avance), nombre max de réservations
-  à venir par personne
+- **Cours réguliers** : un cours crée toutes les séances de la saison ; bouton « 👥 x/12 à l'année » pour voir,
+  inscrire ou retirer les élèves du créneau
+- **Vacances & fermetures** (import des vacances scolaires zone A/B/C, jours fériés sautés)
+- **Vue annuelle** et **vue semaine** ; détail d'une séance : inscrits à l'année, rattrapages, places libérées ;
+  noter une absence, rendre une place, annuler une séance (rattrapage offert aux inscrits)
+- **Séances ponctuelles** (ateliers, stages)
+- **Membres** : créneau, nombre de rattrapages, ajout/retrait manuel de rattrapages
+- **Réglages** : délai pour libérer sa place avec rattrapage, ouverture des réservations, choix du créneau par
+  les élèves eux-mêmes ou non, rattrapage obligatoire ou non pour prendre une place libre
 
 ## Démarrage
 
@@ -78,6 +87,7 @@ test/              tests de l'API (node:test)
 ## Pistes d'évolution
 
 - E-mails automatiques (confirmation, rappel la veille, séance annulée) via un service SMTP
-- Liste d'attente quand une séance est complète
+- Liste d'attente quand une séance est complète (prévenir quand une place se libère)
+- Date d'expiration des rattrapages (fin de saison)
 - Carnets de séances / abonnements et paiement en ligne (Stripe)
 - Mot de passe oublié (nécessite l'envoi d'e-mails)

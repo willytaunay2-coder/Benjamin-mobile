@@ -78,6 +78,28 @@ CREATE TABLE IF NOT EXISTS bookings (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_bookings_active ON bookings(session_id, user_id) WHERE status = 'booked';
 CREATE INDEX IF NOT EXISTS ix_bookings_user ON bookings(user_id);
 
+-- Inscription à l'année sur un créneau (cours régulier)
+CREATE TABLE IF NOT EXISTS enrollments (
+  id          INTEGER PRIMARY KEY,
+  template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  start_date  TEXT NOT NULL,
+  end_date    TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_enrollments_active ON enrollments(template_id, user_id) WHERE end_date IS NULL;
+CREATE INDEX IF NOT EXISTS ix_enrollments_user ON enrollments(user_id);
+
+-- « Je ne viens pas » : place libérée par un·e inscrit·e à l'année
+CREATE TABLE IF NOT EXISTS absences (
+  id          INTEGER PRIMARY KEY,
+  session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  with_credit INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (session_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -87,13 +109,21 @@ INSERT OR IGNORE INTO settings(key, value) VALUES
   ('cancel_deadline_hours', '12'),
   ('booking_horizon_days', '120'),
   ('max_active_bookings', '0'),
-  ('skip_public_holidays', '1');
+  ('skip_public_holidays', '1'),
+  ('makeup_requires_credit', '1'),
+  ('allow_self_enroll', '1');
 `;
+
+function migrate(db) {
+  const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!cols.includes('credit_adjust')) db.exec('ALTER TABLE users ADD COLUMN credit_adjust INTEGER NOT NULL DEFAULT 0');
+}
 
 function openDb(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
+  migrate(db);
   return db;
 }
 

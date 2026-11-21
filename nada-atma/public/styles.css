@@ -263,3 +263,20 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--lavender); 
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .install-tip { background: var(--plum-soft); border-radius: var(--radius); padding: 12px 14px; font-size: .85rem; margin-top: 18px; }
+
+/* ---------- Créneau à l'année & rattrapages ---------- */
+.slot-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  background: #fff; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 14px 16px; margin-bottom: 16px;
+}
+.credits { display: flex; align-items: center; gap: 8px; color: var(--plum); line-height: 1.2; }
+.credits-n {
+  font-family: 'Josefin Sans', sans-serif; font-weight: 700; font-size: 1.8rem;
+  background: var(--plum-soft); border-radius: 12px; min-width: 48px; height: 48px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.session.released { background: repeating-linear-gradient(45deg, #fff, #fff 10px, var(--lavender-soft) 10px, var(--lavender-soft) 20px); }
+.my-top { align-items: stretch; }
+.my-top .card { margin-bottom: 14px; }
+@media (max-width: 640px) { .my-top { grid-template-columns: 1fr; gap: 0; } }

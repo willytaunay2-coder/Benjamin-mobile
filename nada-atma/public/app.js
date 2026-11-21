@@ -1,7 +1,7 @@
 'use strict';
 /* Nada Atma — application de réservation (SPA sans dépendance) */
 
-const state = { user: null, settings: {}, filter: '' };
+const state = { user: null, settings: {}, filter: '', credits: 0, enrollments: [] };
 const $view = document.getElementById('view');
 
 // ---------- Utilitaires ----------
@@ -134,6 +134,7 @@ const ROUTES = {
   '#/connexion': viewLogin,
   '#/inscription': viewRegister,
   '#/mes-reservations': viewMyBookings,
+  '#/mon-creneau': viewChooseSlot,
   '#/profil': viewProfile,
   '#/admin': viewAdminSessions,
   '#/admin/annee': viewAdminYear,
@@ -147,7 +148,7 @@ async function router() {
   const path = location.hash.split('?')[0] || '#/planning';
   renderNav();
   document.getElementById('modal-root').innerHTML = '';
-  const needUser = ['#/mes-reservations', '#/profil'].includes(path) || path.startsWith('#/admin');
+  const needUser = ['#/mes-reservations', '#/profil', '#/mon-creneau'].includes(path) || path.startsWith('#/admin');
   if (needUser && !state.user) { location.hash = '#/connexion'; return; }
   if (path.startsWith('#/admin') && !isAdmin()) { location.hash = '#/planning'; return; }
   const fn = ROUTES[path] || viewPlanning;
@@ -157,7 +158,7 @@ async function router() {
 
 // ---------- Composants séance ----------
 function spotsHtml(s) {
-  const pct = Math.min(100, Math.round((s.booked_count / s.capacity) * 100));
+  const pct = Math.min(100, Math.round((s.occupied / s.capacity) * 100));
   return `<span class="spots"><span class="spots-bar"><i style="width:${pct}%"></i></span>${s.spots_left > 0 ? plural(s.spots_left, 'place') : 'Complet'}</span>`;
 }
 
@@ -165,26 +166,19 @@ function sessionCard(s, { admin = false } = {}) {
   const meta = [
     `${s.duration_min} min`,
     s.location && `📍 ${esc(s.location)}`,
-    admin ? `👥 ${s.booked_count}/${s.capacity}` : (!s.cancelled && !s.is_past ? spotsHtml(s) : ''),
+    admin ? `👥 ${s.occupied}/${s.capacity}${s.absent_count ? ` · ${s.absent_count} absent${s.absent_count > 1 ? 's' : ''}` : ''}` : (!s.cancelled && !s.is_past ? spotsHtml(s) : ''),
   ].filter(Boolean).map((m) => `<span>${m}</span>`).join('');
 
   let action = '';
   if (admin) {
     action = s.cancelled ? '<span class="badge danger">Annulée</span>'
-      : s.booked_count >= s.capacity ? '<span class="badge plum">Complet</span>' : '';
-  } else if (s.cancelled) {
-    action = `<span class="badge danger">Annulée</span>${s.my_booking_id ? '<div class="small muted">Vous étiez inscrit·e</div>' : ''}`;
-  } else if (s.my_booking_id) {
-    action = `<span class="badge ok">✓ Inscrit·e</span>${s.is_past ? '' : `<button class="btn ghost small" data-manage="${s.my_booking_id}">Gérer</button>`}`;
-  } else if (s.is_past) {
-    action = '<span class="badge">Passée</span>';
-  } else if (s.spots_left <= 0) {
-    action = '<span class="badge plum">Complet</span>';
+      : s.occupied >= s.capacity ? '<span class="badge plum">Complet</span>' : '';
   } else {
-    action = `<button class="btn small" data-book="${s.id}">Réserver</button>`;
+    action = memberAction(s);
   }
 
-  const cls = ['session', s.cancelled && 'cancelled', s.my_booking_id && !admin && 'mine', admin && 'clickable'].filter(Boolean).join(' ');
+  const mine = !admin && (s.my_status === 'enrolled' || s.my_status === 'booked');
+  const cls = ['session', s.cancelled && 'cancelled', mine && 'mine', s.my_status === 'released' && 'released', admin && 'clickable'].filter(Boolean).join(' ');
   return `<div class="${cls}" style="--c:${esc(s.color)}" ${admin ? `data-session="${s.id}"` : ''}>
     <div class="s-time">${s.start_time.replace(':', 'h')}<small>${endTime(s.start_time, s.duration_min).replace(':', 'h')}</small></div>
     <div class="s-body">
@@ -195,6 +189,46 @@ function sessionCard(s, { admin = false } = {}) {
     </div>
     <div class="s-action">${action}</div>
   </div>`;
+}
+
+// Boutons d'une séance pour un·e élève selon sa situation
+function memberAction(s) {
+  if (s.cancelled) {
+    if (s.my_status === 'enrolled' || s.my_status === 'released') return '<span class="badge danger">Annulée</span><div class="small muted">Rattrapage offert</div>';
+    if (s.my_status === 'booked') return `<span class="badge danger">Annulée</span><button class="btn ghost small" data-manage="${s.id}">Déplacer</button>`;
+    return '<span class="badge danger">Annulée</span>';
+  }
+  if (s.is_past) {
+    return s.my_status === 'enrolled' || s.my_status === 'booked' ? '<span class="badge ok">✓ Venu·e</span>' : '<span class="badge">Passée</span>';
+  }
+  if (s.my_status === 'enrolled') {
+    return `<span class="badge ok">✓ Mon créneau</span><button class="btn secondary small" data-manage="${s.id}">Je ne viens pas</button>`;
+  }
+  if (s.my_status === 'released') {
+    return `<span class="badge warn">Place libérée</span>${s.spots_left > 0 ? `<button class="btn ghost small" data-unrelease="${s.id}">Je viens finalement</button>` : ''}`;
+  }
+  if (s.my_status === 'booked') {
+    return `<span class="badge ok">✓ Rattrapage</span><button class="btn ghost small" data-manage="${s.id}">Gérer</button>`;
+  }
+  if (s.spots_left <= 0) return '<span class="badge plum">Complet</span>';
+  if (state.user && needCredit() && state.credits <= 0) {
+    return '<span class="badge">Place libre</span><div class="small muted">Sans rattrapage dispo</div>';
+  }
+  return `<button class="btn small" data-book="${s.id}">${needCredit() && state.user ? 'Rattraper ici' : 'Réserver'}</button>`;
+}
+const needCredit = () => !!state.settings.makeup_requires_credit;
+
+// Bandeau « mon créneau + mes rattrapages »
+function slotBanner() {
+  if (!state.user || isAdmin() && !state.enrollments.length) return '';
+  if (!state.enrollments.length) {
+    return state.settings.allow_self_enroll
+      ? `<div class="slot-banner"><div><strong>Choisissez votre créneau à l'année</strong><div class="small">Votre place sera réservée chaque semaine.</div></div><a class="btn small" href="#/mon-creneau">Choisir</a></div>`
+      : '';
+  }
+  const slots = state.enrollments.map((e) => `${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} · ${esc(e.title)}`).join('<br>');
+  return `<div class="slot-banner"><div><div class="small muted">Mon créneau à l'année</div><strong>${slots}</strong></div>
+    <div class="credits"><span class="credits-n">${state.credits}</span><span class="small">rattrapage${state.credits > 1 ? 's' : ''}<br>disponible${state.credits > 1 ? 's' : ''}</span></div></div>`;
 }
 
 function weekHtml(from, data, { admin = false } = {}) {
@@ -208,7 +242,7 @@ function weekHtml(from, data, { admin = false } = {}) {
     const d = addDays(from, i);
     const closure = data.closures.find((c) => c.start_date <= d && c.end_date >= d);
     // côté élèves, les séances annulées par une fermeture sont remplacées par le bandeau
-    const list = (byDay[d] || []).filter((s) => admin || !(s.cancelled && s.closure_id && !s.my_booking_id));
+    const list = (byDay[d] || []).filter((s) => admin || !(s.cancelled && s.closure_id && !s.my_status));
     if (!list.length && !closure && !admin && (i >= 5)) continue; // masque le week-end vide
     html += `<section class="day"><h3 class="day-title ${d === today() ? 'today' : ''}">${fmtLong(d)}</h3>`;
     if (closure) html += `<div class="closure-banner">🌿 ${esc(closure.label)} — pas de cours</div>`;
@@ -229,13 +263,20 @@ function filtersHtml(sessions) {
 }
 
 // ---------- Réservation / déplacement ----------
+async function afterChange(after) { try { await refreshMe(); } catch { /* */ } after && after(); }
+
 async function book(sessionId, after) {
   if (!state.user) { toast('Connectez-vous pour réserver'); location.hash = '#/connexion'; return; }
   try {
     const r = await api(`/api/sessions/${sessionId}/book`, { method: 'POST' });
     toast(`Réservé : ${r.session.title}, ${fmtLong(r.session.date)} à ${r.session.start_time.replace(':', 'h')} ✨`);
-    after && after();
-  } catch (e) { toast(e.message, true); }
+    afterChange(after);
+  } catch (e) { toast(e.message, true); after && after(); }
+}
+
+async function unrelease(sessionId, after) {
+  try { await api(`/api/sessions/${sessionId}/unrelease`, { method: 'POST' }); toast('Votre place est à nouveau réservée 🙏'); afterChange(after); }
+  catch (e) { toast(e.message, true); }
 }
 
 function deadlineInfo(s) {
@@ -243,46 +284,70 @@ function deadlineInfo(s) {
   const [y, m, d] = s.date.split('-').map(Number);
   const [hh, mm] = s.start_time.split(':').map(Number);
   const start = new Date(y, m - 1, d, hh, mm);
-  return { locked: !s.cancelled && !isAdmin() && start - new Date() < h * 3600000, hours: h };
+  return { late: start - new Date() < h * 3600000, hours: h };
 }
 
-async function manageBooking(bookingId, s, after) {
-  const { locked, hours } = deadlineInfo(s);
-  modal(`
-    <div class="modal-head"><h2>${esc(s.title)}</h2><button class="icon-btn" data-close aria-label="Fermer">✕</button></div>
-    <p><strong>${fmtFull(s.date)}</strong><br>${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}${s.location ? ` · ${esc(s.location)}` : ''}</p>
-    ${s.cancelled ? `<p class="badge danger">Séance annulée${s.cancel_reason ? ` : ${esc(s.cancel_reason)}` : ''}</p><p class="small">Vous pouvez déplacer votre réservation vers une autre séance.</p>` : ''}
-    ${locked ? `<p class="badge warn">Modification impossible moins de ${hours} h avant la séance</p><p class="small muted">Contactez directement votre professeure si besoin.</p>` : ''}
+// Fenêtre « Je ne viens pas » (créneau) ou « Gérer » (rattrapage)
+function manageSession(s, after) {
+  const { late, hours } = deadlineInfo(s);
+  const enrolled = s.my_status === 'enrolled';
+  const head = `<div class="modal-head"><h2>${esc(s.title)}</h2><button class="icon-btn" data-close aria-label="Fermer">✕</button></div>
+    <p><strong style="text-transform:capitalize">${fmtFull(s.date)}</strong><br>${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}${s.location ? ` · ${esc(s.location)}` : ''}</p>`;
+  if (s.cancelled) { moveSession(s, after); return; }
+  if (enrolled) {
+    modal(`${head}
+      <p>Vous ne pouvez pas venir ? Libérez votre place : quelqu'un d'autre pourra la prendre${late ? '' : ', et vous gagnez <strong>un rattrapage</strong> à utiliser sur un créneau libre'}.</p>
+      ${late ? `<p class="badge warn">Moins de ${hours} h avant la séance : la place sera libérée, mais sans rattrapage.</p>` : ''}
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn" id="release">Libérer ma place</button>
+        ${late ? '' : '<button class="btn secondary" id="move">↔ Venir un autre jour</button>'}
+      </div>`, (m, close) => {
+      m.querySelector('#release').onclick = async () => {
+        try {
+          const r = await api(`/api/sessions/${s.id}/release`, { method: 'POST' });
+          close();
+          toast(r.with_credit ? `Place libérée. Vous avez ${plural(r.credits, 'rattrapage')} disponible${r.credits > 1 ? 's' : ''} ✨` : 'Place libérée (sans rattrapage, délai dépassé)');
+          afterChange(after);
+        } catch (e) { toast(e.message, true); }
+      };
+      const mv = m.querySelector('#move');
+      if (mv) mv.onclick = () => { close(); moveSession(s, after); };
+    });
+    return;
+  }
+  // rattrapage / réservation ponctuelle
+  modal(`${head}
+    ${late && !isAdmin() ? `<p class="badge warn">Modification impossible moins de ${hours} h avant la séance</p><p class="small muted">Contactez directement votre professeure si besoin.</p>` : '<p class="small muted">En annulant, votre rattrapage vous est rendu.</p>'}
     <div class="btn-row" style="margin-top:14px">
-      <button class="btn" id="move" ${locked ? 'disabled' : ''}>↔ Déplacer</button>
-      <button class="btn danger" id="cancel" ${locked ? 'disabled' : ''}>Annuler ma place</button>
+      <button class="btn" id="move" ${late ? 'disabled' : ''}>↔ Déplacer</button>
+      <button class="btn danger" id="cancel" ${late ? 'disabled' : ''}>Annuler</button>
     </div>`, (m, close) => {
-    m.querySelector('#move').onclick = () => { close(); moveBooking(bookingId, s, after); };
+    m.querySelector('#move').onclick = () => { close(); moveSession(s, after); };
     m.querySelector('#cancel').onclick = async () => {
-      close();
-      if (!(await confirmBox(`Annuler votre place pour <strong>${esc(s.title)}</strong> du ${fmtLong(s.date)} ?`, 'Oui, annuler', true))) return;
-      try { await api(`/api/bookings/${bookingId}/cancel`, { method: 'POST' }); toast('Réservation annulée'); after && after(); }
+      try { await api(`/api/bookings/${s.my_booking_id}/cancel`, { method: 'POST' }); close(); toast('Réservation annulée, rattrapage rendu'); afterChange(after); }
       catch (e) { toast(e.message, true); }
     };
   });
 }
 
-async function moveBooking(bookingId, from, after) {
+// Choisir une autre séance libre (déplacement en une seule opération)
+function moveSession(from, after) {
   let horizon = 28;
   const close = modal(`
-    <div class="modal-head"><h2>Déplacer ma séance</h2><button class="icon-btn" data-close aria-label="Fermer">✕</button></div>
-    <p class="small muted">Actuellement : ${esc(from.title)} — ${fmtLong(from.date)} à ${from.start_time.replace(':', 'h')}</p>
-    <div class="filters"><button class="chip active" data-same="1">Même cours</button><button class="chip" data-same="0">Tous les cours</button></div>
+    <div class="modal-head"><h2>Venir un autre jour</h2><button class="icon-btn" data-close aria-label="Fermer">✕</button></div>
+    <p class="small muted">Au lieu de : ${esc(from.title)} — ${fmtLong(from.date)} à ${from.start_time.replace(':', 'h')}</p>
+    <div class="filters"><button class="chip" data-same="1">Même cours</button><button class="chip active" data-same="0">Tous les créneaux libres</button></div>
     <div id="alts"><div class="spinner"></div></div>`, (m) => {
-    let same = true;
+    let same = false;
     const load = async () => {
       const alts = m.querySelector('#alts');
       alts.innerHTML = '<div class="spinner"></div>';
       try {
         const data = await api(`/api/sessions?from=${today()}&to=${addDays(today(), horizon)}`);
-        const list = data.sessions.filter((s) => !s.cancelled && !s.is_past && s.spots_left > 0 && !s.my_booking_id && s.id !== from.id && (!same || s.title === from.title));
+        const list = data.sessions.filter((s) => !s.cancelled && !s.is_past && s.spots_left > 0 && s.id !== from.id
+          && (!s.my_status || s.my_status === 'released') && (!same || s.title === from.title));
         if (!list.length) {
-          alts.innerHTML = `<div class="empty">Aucune autre séance disponible sur les ${horizon} prochains jours.</div>`;
+          alts.innerHTML = `<div class="empty">Aucune place libre sur les ${horizon} prochains jours.</div>`;
         } else {
           let last = '';
           alts.innerHTML = list.map((s) => {
@@ -290,7 +355,7 @@ async function moveBooking(bookingId, from, after) {
             last = s.date;
             return `${head}<div class="session" style="--c:${esc(s.color)}">
               <div class="s-time">${s.start_time.replace(':', 'h')}</div>
-              <div class="s-body"><div class="s-title">${esc(s.title)}</div><div class="s-meta">${spotsHtml(s)}</div></div>
+              <div class="s-body"><div class="s-title">${esc(s.title)}</div><div class="s-meta">${s.my_status === 'released' ? '<span>Votre créneau habituel</span>' : spotsHtml(s)}</div></div>
               <div class="s-action"><button class="btn small" data-target="${s.id}">Choisir</button></div></div>`;
           }).join('');
         }
@@ -305,10 +370,10 @@ async function moveBooking(bookingId, from, after) {
       if (t) {
         t.disabled = true;
         try {
-          const r = await api(`/api/bookings/${bookingId}/move`, { method: 'POST', body: { target_session_id: Number(t.dataset.target) } });
+          const r = await api(`/api/sessions/${from.id}/swap`, { method: 'POST', body: { target_session_id: Number(t.dataset.target) } });
           close();
-          toast(`Déplacé vers ${fmtLong(r.session.date)} à ${r.session.start_time.replace(':', 'h')} ✨`);
-          after && after();
+          toast(`C'est noté : ${fmtLong(r.session.date)} à ${r.session.start_time.replace(':', 'h')} ✨`);
+          afterChange(after);
         } catch (err) { t.disabled = false; toast(err.message, true); }
       }
     });
@@ -332,7 +397,7 @@ async function viewPlanning() {
   const to = addDays(from, 6);
   $view.innerHTML = `
     ${!state.user ? `<div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p>
-      <p class="muted">Consultez le planning et <a href="#/inscription">créez votre compte</a> pour réserver vos séances.</p></div>` : ''}
+      <p class="muted">Consultez le planning et <a href="#/inscription">créez votre compte</a> pour choisir votre créneau.</p></div>` : slotBanner()}
     <div class="week-head">
       <button class="icon-btn" id="prev" aria-label="Semaine précédente">‹</button>
       <h1>${fmt(from, { day: 'numeric', month: 'short' })} – ${fmt(to, { day: 'numeric', month: 'short', year: 'numeric' })}</h1>
@@ -349,47 +414,84 @@ async function viewPlanning() {
   $view.querySelector('#next').onclick = () => go(addDays(from, 7));
   $view.querySelector('#now').onclick = () => go(today());
   $view.querySelector('#jump').onchange = (e) => e.target.value && go(e.target.value);
-  $view.onclick = (e) => {
-    const f = e.target.closest('[data-filter]');
-    if (f) { state.filter = f.dataset.filter; viewPlanning(); return; }
-    const b = e.target.closest('[data-book]');
-    if (b) { b.disabled = true; book(b.dataset.book, viewPlanning); return; }
-    const g = e.target.closest('[data-manage]');
-    if (g) {
-      const s = data.sessions.find((x) => String(x.my_booking_id) === g.dataset.manage);
-      manageBooking(g.dataset.manage, s, viewPlanning);
-    }
-  };
+  $view.onclick = (e) => memberClicks(e, data.sessions, viewPlanning, () => { viewPlanning(); });
+}
+
+// Gestion commune des boutons d'une séance (planning, mes séances)
+function memberClicks(e, sessions, after, onFilter) {
+  const f = e.target.closest('[data-filter]');
+  if (f && onFilter) { state.filter = f.dataset.filter; onFilter(); return; }
+  const b = e.target.closest('[data-book]');
+  if (b) { b.disabled = true; book(b.dataset.book, after); return; }
+  const u = e.target.closest('[data-unrelease]');
+  if (u) { u.disabled = true; unrelease(u.dataset.unrelease, after); return; }
+  const g = e.target.closest('[data-manage]');
+  if (g) manageSession(sessions.find((x) => String(x.id) === g.dataset.manage), after);
 }
 
 async function viewMyBookings() {
   loading();
-  const { bookings } = await api('/api/my/bookings');
-  const upcoming = bookings.filter((b) => !b.is_past);
-  const past = bookings.filter((b) => b.is_past).reverse();
+  const data = await api(`/api/my/sessions?from=${addDays(today(), -90)}&to=${addDays(today(), 63)}`);
+  state.credits = data.credits; state.enrollments = data.enrollments;
+  const upcoming = data.sessions.filter((s) => !s.is_past);
+  const past = data.sessions.filter((s) => s.is_past && !s.cancelled && s.my_status !== 'released').reverse();
   const h = state.settings.cancel_deadline_hours;
-  const row = (b, withActions) => `
-    <div class="session ${b.cancelled ? 'cancelled' : ''}" style="--c:${esc(b.color)}">
-      <div class="s-time">${fmt(b.date, { day: 'numeric' })}<small>${fmt(b.date, { month: 'short' })}</small></div>
+  const row = (s) => `
+    <div class="session ${s.cancelled ? 'cancelled' : ''} ${s.my_status === 'released' ? 'released' : ''}" style="--c:${esc(s.color)}">
+      <div class="s-time">${fmt(s.date, { day: 'numeric' })}<small>${fmt(s.date, { month: 'short' })}</small></div>
       <div class="s-body">
-        <div class="s-title">${esc(b.title)}</div>
-        <div class="s-meta"><span style="text-transform:capitalize">${fmt(b.date, { weekday: 'long' })}</span><span>${b.start_time.replace(':', 'h')} – ${endTime(b.start_time, b.duration_min).replace(':', 'h')}</span>${b.location ? `<span>📍 ${esc(b.location)}</span>` : ''}</div>
-        ${b.cancelled ? `<div class="small" style="color:var(--danger)">Séance annulée${b.cancel_reason ? ` : ${esc(b.cancel_reason)}` : ''} — déplacez votre réservation</div>` : ''}
+        <div class="s-title">${esc(s.title)}</div>
+        <div class="s-meta"><span style="text-transform:capitalize">${fmt(s.date, { weekday: 'long' })}</span><span>${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}</span></div>
+        ${s.cancelled && s.cancel_reason ? `<div class="small" style="color:var(--danger)">${esc(s.cancel_reason)}</div>` : ''}
       </div>
-      ${withActions ? `<div class="s-action"><button class="btn small ${b.cancelled ? '' : 'secondary'}" data-manage="${b.booking_id}">${b.cancelled ? 'Déplacer' : 'Gérer'}</button></div>` : ''}
+      <div class="s-action">${memberAction(s)}</div>
     </div>`;
+  const slots = state.enrollments.length
+    ? state.enrollments.map((e) => `<div class="list-item"><span class="dot" style="background:${esc(e.color)}"></span><div class="grow"><strong>${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} — ${esc(e.title)}</strong><div class="small muted">${e.duration_min} min${e.location ? ` · ${esc(e.location)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div></div>`).join('')
+    : `<p class="muted">Vous n'avez pas encore de créneau à l'année.</p>${state.settings.allow_self_enroll ? '<a class="btn" href="#/mon-creneau">Choisir mon créneau</a>' : '<p class="small muted">Votre professeure vous inscrira sur votre créneau.</p>'}`;
   $view.innerHTML = `
     <h1>Mes séances</h1>
-    <p class="muted small">Vous pouvez déplacer ou annuler une séance jusqu'à ${h} h avant son début.</p>
-    ${upcoming.length ? upcoming.map((b) => row(b, true)).join('') : `<div class="empty"><div class="big">🧘</div>Aucune séance réservée.<br><br><a class="btn" href="#/planning">Voir le planning</a></div>`}
-    ${past.length ? `<h2 style="margin-top:28px">Historique</h2>${past.slice(0, 30).map((b) => row(b, false)).join('')}` : ''}
+    <div class="grid2 my-top">
+      <div class="card"><h2>Mon créneau à l'année</h2>${slots}</div>
+      <div class="card credits-card"><h2>Mes rattrapages</h2>
+        <div class="credits"><span class="credits-n">${state.credits}</span><span>disponible${state.credits > 1 ? 's' : ''}</span></div>
+        <p class="small muted">Libérez votre place au moins ${h} h avant le cours pour gagner un rattrapage, puis réservez une place libre dans le planning.</p>
+        ${state.credits > 0 ? '<a class="btn small" href="#/planning">Trouver une place libre</a>' : ''}
+      </div>
+    </div>
+    <h2 style="margin-top:8px">Prochaines séances</h2>
+    ${upcoming.length ? upcoming.map(row).join('') : '<div class="empty"><div class="big">🧘</div>Aucune séance à venir.</div>'}
+    ${past.length ? `<h2 style="margin-top:28px">Historique</h2>${past.slice(0, 20).map(row).join('')}` : ''}
   `;
-  $view.onclick = (e) => {
-    const g = e.target.closest('[data-manage]');
-    if (!g) return;
-    const b = bookings.find((x) => String(x.booking_id) === g.dataset.manage);
-    if (b.cancelled) moveBooking(b.booking_id, b, viewMyBookings);
-    else manageBooking(b.booking_id, b, viewMyBookings);
+  $view.onclick = (e) => memberClicks(e, data.sessions, viewMyBookings);
+}
+
+// Choisir son créneau à l'année
+async function viewChooseSlot() {
+  loading();
+  const { templates } = await api('/api/templates');
+  $view.innerHTML = `
+    <h1>Choisir mon créneau</h1>
+    <p class="muted">Votre place est réservée chaque semaine sur ce créneau, toute l'année (hors vacances). Si vous ne pouvez pas venir, vous libérez votre place et gagnez un rattrapage.</p>
+    ${templates.length ? templates.map((t) => `
+      <div class="session" style="--c:${esc(t.color)}">
+        <div class="s-time">${DAYS[t.weekday].slice(0, 3)}<small>${t.start_time.replace(':', 'h')}</small></div>
+        <div class="s-body"><div class="s-title">${esc(t.title)}</div>
+          <div class="s-meta"><span>${t.duration_min} min</span>${t.location ? `<span>📍 ${esc(t.location)}</span>` : ''}<span>${t.free > 0 ? plural(t.free, 'place') + ' à l’année' : 'Complet'}</span></div>
+          ${t.description ? `<div class="small muted">${esc(t.description)}</div>` : ''}</div>
+        <div class="s-action">${t.mine ? '<span class="badge ok">✓ Mon créneau</span>' : t.free > 0 ? `<button class="btn small" data-enroll="${t.id}">Choisir</button>` : '<span class="badge plum">Complet</span>'}</div>
+      </div>`).join('') : '<div class="empty">Aucun créneau proposé pour le moment.</div>'}`;
+  $view.onclick = async (e) => {
+    const b = e.target.closest('[data-enroll]');
+    if (!b) return;
+    const t = templates.find((x) => String(x.id) === b.dataset.enroll);
+    if (!(await confirmBox(`Vous inscrire à l'année sur <strong>${esc(t.title)}</strong>, le ${DAYS[t.weekday].toLowerCase()} à ${t.start_time.replace(':', 'h')} ?`, 'Oui, je m’inscris'))) return;
+    try {
+      const r = await api(`/api/templates/${t.id}/enroll`, { method: 'POST' });
+      await refreshMe();
+      toast(`Inscription confirmée à partir du ${fmtLong(r.start_date)} 🙏`);
+      location.hash = '#/mes-reservations';
+    } catch (err) { toast(err.message, true); }
   };
 }
 
@@ -501,7 +603,7 @@ async function viewAdminSessions() {
   setHashParams('#/admin', { semaine: from === mondayOf(today()) ? '' : from });
   loading();
   const data = await api(`/api/sessions?from=${from}&to=${addDays(from, 6)}`);
-  const total = data.sessions.filter((s) => !s.cancelled).reduce((a, s) => a + s.booked_count, 0);
+  const total = data.sessions.filter((s) => !s.cancelled).reduce((a, s) => a + s.occupied, 0);
   $view.innerHTML = `
     ${adminNav('#/admin')}
     <div class="week-head">
@@ -511,7 +613,7 @@ async function viewAdminSessions() {
       <button class="btn secondary small" id="now">Aujourd'hui</button>
       <button class="btn small" id="add">+ Séance ponctuelle</button>
     </div>
-    <p class="muted small">${plural(data.sessions.filter((s) => !s.cancelled).length, 'séance')} · ${plural(total, 'inscription')} cette semaine. Touchez une séance pour voir les inscrit·es.</p>
+    <p class="muted small">${plural(data.sessions.filter((s) => !s.cancelled).length, 'séance')} · ${plural(total, 'place')} occupées cette semaine. Touchez une séance pour voir les inscrit·es.</p>
     ${weekHtml(from, data, { admin: true })}`;
   const go = (d) => { location.hash = `#/admin?semaine=${mondayOf(d)}`; };
   $view.querySelector('#prev').onclick = () => go(addDays(from, -7));
@@ -525,33 +627,46 @@ async function viewAdminSessions() {
 }
 
 async function sessionDetailModal(id, after) {
-  const [{ session: s, attendees }, { users }] = await Promise.all([api(`/api/admin/sessions/${id}`), api('/api/admin/users')]);
-  const others = users.filter((u) => u.active && !attendees.some((a) => a.id === u.id));
+  const [{ session: s, attendees, absent }, { users }] = await Promise.all([api(`/api/admin/sessions/${id}`), api('/api/admin/users')]);
+  const others = users.filter((u) => u.active && !attendees.some((a) => a.id === u.id) && !absent.some((a) => a.id === u.id));
+  const kindBadge = { regular: '<span class="badge">À l’année</span>', makeup: '<span class="badge ok">Rattrapage</span>' };
+  const personRow = (a, btn) => `<div class="list-item"><div class="grow"><strong>${esc(a.name)}</strong> ${kindBadge[a.kind] || ''}<div class="small muted">${esc(a.email)}${a.phone ? ` · <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>` : ''}</div></div>${btn}</div>`;
   modal(`
     <div class="modal-head"><h2>${esc(s.title)}</h2><button class="icon-btn" data-close aria-label="Fermer">✕</button></div>
     <p><strong style="text-transform:capitalize">${fmtFull(s.date)}</strong><br>
       ${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}${s.location ? ` · ${esc(s.location)}` : ''}<br>
-      ${s.cancelled ? `<span class="badge danger">Annulée${s.cancel_reason ? ` : ${esc(s.cancel_reason)}` : ''}</span>` : `<span class="badge plum">${s.booked_count} / ${s.capacity} inscrit·es</span>`}</p>
+      ${s.cancelled ? `<span class="badge danger">Annulée${s.cancel_reason ? ` : ${esc(s.cancel_reason)}` : ''}</span>` : `<span class="badge plum">${s.occupied} / ${s.capacity} inscrit·es</span>`}</p>
     <h3>Participant·es</h3>
-    ${attendees.length ? attendees.map((a) => `
-      <div class="list-item"><div class="grow"><strong>${esc(a.name)}</strong><div class="small muted">${esc(a.email)}${a.phone ? ` · <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>` : ''}</div></div>
-      <button class="btn ghost small" data-unbook="${a.booking_id}">Retirer</button></div>`).join('') : '<p class="muted small">Personne pour le moment.</p>'}
+    ${attendees.length ? attendees.map((a) => personRow(a, a.kind === 'makeup'
+      ? `<button class="btn ghost small" data-unbook="${a.booking_id}">Retirer</button>`
+      : `<button class="btn ghost small" data-absent="${a.id}">Absent·e</button>`)).join('') : '<p class="muted small">Personne pour le moment.</p>'}
+    ${absent.length ? `<h3 style="margin-top:14px">Places libérées (${absent.length})</h3>${absent.map((a) => personRow(a, `<button class="btn ghost small" data-present="${a.id}">Remettre</button>`)).join('')}` : ''}
     ${!s.cancelled && !s.is_past && s.spots_left > 0 && others.length ? `
       <div class="btn-row" style="margin:10px 0 18px">
-        <select id="adduser" style="flex:1"><option value="">Inscrire un membre…</option>${others.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
-        <button class="btn small" id="addbtn">Inscrire</button>
+        <select id="adduser" style="flex:1"><option value="">Ajouter quelqu’un pour cette séance…</option>${others.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
+        <button class="btn small" id="addbtn">Ajouter</button>
       </div>` : ''}
     ${attendees.length ? `<p class="small"><a href="mailto:?bcc=${encodeURIComponent(attendees.map((a) => a.email).join(','))}&subject=${encodeURIComponent(`${s.title} — ${fmtLong(s.date)}`)}">✉ Écrire à tous les inscrit·es</a></p>` : ''}
     <div class="btn-row" style="margin-top:16px">
       <button class="btn secondary small" id="edit">Modifier</button>
       ${s.cancelled ? '<button class="btn ok small" id="restore">Rétablir la séance</button>' : '<button class="btn danger small" id="cancel">Annuler la séance</button>'}
-      ${!attendees.length ? '<button class="btn ghost small" id="del">Supprimer</button>' : ''}
+      ${!attendees.length && !absent.length ? '<button class="btn ghost small" id="del">Supprimer</button>' : ''}
     </div>`, (m, close) => {
     const reopen = () => { after && after(); sessionDetailModal(id, after); };
     m.addEventListener('click', async (e) => {
       const u = e.target.closest('[data-unbook]');
       if (u) {
         try { await api(`/api/bookings/${u.dataset.unbook}/cancel`, { method: 'POST' }); toast('Participant·e retiré·e'); reopen(); }
+        catch (err) { toast(err.message, true); }
+      }
+      const ab = e.target.closest('[data-absent]');
+      if (ab) {
+        try { await api(`/api/admin/sessions/${id}/absences`, { method: 'POST', body: { user_id: Number(ab.dataset.absent) } }); toast('Absence notée, place libérée, rattrapage crédité'); reopen(); }
+        catch (err) { toast(err.message, true); }
+      }
+      const pr = e.target.closest('[data-present]');
+      if (pr) {
+        try { await api(`/api/admin/sessions/${id}/absences/${pr.dataset.present}`, { method: 'DELETE' }); toast('Place rendue'); reopen(); }
         catch (err) { toast(err.message, true); }
       }
     });
@@ -639,9 +754,9 @@ async function viewAdminYear() {
       const ds = `${y}-${pad(mo + 1)}-${pad(d)}`;
       const list = byDay[ds] || [];
       const c = closedDay(ds);
-      const full = list.length && list.every((s) => s.booked_count >= s.capacity);
+      const full = list.length && list.every((s) => s.occupied >= s.capacity);
       const cls = ['d', list.length && 'has', full && 'full', !list.length && c && 'closed', ds === today() && 'today'].filter(Boolean).join(' ');
-      const tip = c ? c.label : list.map((s) => `${s.start_time} ${s.title} (${s.booked_count}/${s.capacity})`).join('\n');
+      const tip = c ? c.label : list.map((s) => `${s.start_time} ${s.title} (${s.occupied}/${s.capacity})`).join('\n');
       cells += `<div class="${cls}" data-day="${ds}" title="${esc(tip)}">${d}</div>`;
     }
     months += `<div class="month"><h3>${first.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}</h3><div class="month-grid">${cells}</div></div>`;
@@ -653,7 +768,7 @@ async function viewAdminYear() {
       <h1>Saison ${startYear}–${startYear + 1}</h1>
       <button class="icon-btn" id="next" aria-label="Année suivante">›</button>
     </div>
-    <p class="muted small">${plural(active.length, 'séance')} programmée${active.length > 1 ? 's' : ''} · ${plural(active.reduce((a, s) => a + s.booked_count, 0), 'réservation')} · ${plural(data.closures.length, 'période')} de fermeture</p>
+    <p class="muted small">${plural(active.length, 'séance')} programmée${active.length > 1 ? 's' : ''} · ${plural(active.reduce((a, s) => a + s.occupied, 0), 'place occupée')} · ${plural(data.closures.length, 'période')} de fermeture</p>
     <div class="legend"><span class="l-has">Cours</span><span class="l-full">Complet</span><span class="l-closed">Vacances / fermeture</span></div>
     <div class="year-grid">${months}</div>`;
   $view.querySelector('#prev').onclick = () => { location.hash = `#/admin/annee?annee=${startYear - 1}`; };
@@ -686,7 +801,10 @@ async function viewAdminTemplates() {
           <div class="small muted">${DAYS[t.weekday]} ${t.start_time.replace(':', 'h')} · ${t.duration_min} min · ${t.capacity} places${t.location ? ` · ${esc(t.location)}` : ''}</div>
           <div class="small muted">Du ${fmtShort(t.start_date)} ${t.start_date.slice(0, 4)} au ${fmtShort(t.end_date)} ${t.end_date.slice(0, 4)} · ${plural(t.upcoming_sessions, 'séance')} à venir</div>
         </div>
-        <button class="btn secondary small" data-edit="${t.id}">Modifier</button>
+        <div class="btn-row">
+          <button class="btn small ${t.enrolled >= t.capacity ? 'secondary' : ''}" data-enrolled="${t.id}">👥 ${t.enrolled}/${t.capacity} à l’année</button>
+          <button class="btn secondary small" data-edit="${t.id}">Modifier</button>
+        </div>
       </div>`).join('')}</div>` : `<div class="empty card"><div class="big">🪷</div>Aucun cours pour l'instant.<br>Commencez par créer vos cours de la semaine (ex. « Hatha yoga — mardi 18h30 »).</div>`}
     ${templates.length ? `
     <div class="card">
@@ -708,7 +826,39 @@ async function viewAdminTemplates() {
   $view.onclick = (e) => {
     const b = e.target.closest('[data-edit]');
     if (b) templateModal(templates.find((t) => String(t.id) === b.dataset.edit), viewAdminTemplates);
+    const en = e.target.closest('[data-enrolled]');
+    if (en) enrollmentsModal(templates.find((t) => String(t.id) === en.dataset.enrolled), viewAdminTemplates);
   };
+}
+
+// Inscrit·es à l'année sur un créneau
+async function enrollmentsModal(t, after) {
+  const [{ enrollments }, { users }] = await Promise.all([api(`/api/admin/templates/${t.id}/enrollments`), api('/api/admin/users')]);
+  const others = users.filter((u) => u.active && !enrollments.some((e) => e.user_id === u.id));
+  modal(`
+    <div class="modal-head"><h2>${esc(t.title)}</h2><button class="icon-btn" data-close aria-label="Fermer">✕</button></div>
+    <p>${DAYS[t.weekday]} ${t.start_time.replace(':', 'h')} · <span class="badge plum">${enrollments.length} / ${t.capacity} inscrit·es à l’année</span></p>
+    ${enrollments.length ? enrollments.map((e) => `<div class="list-item"><div class="grow"><strong>${esc(e.name)}</strong><div class="small muted">${esc(e.email)}${e.phone ? ` · ${esc(e.phone)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div>
+      <button class="btn ghost small" data-end="${e.id}">Retirer</button></div>`).join('') : '<p class="muted small">Personne pour le moment.</p>'}
+    ${enrollments.length < t.capacity && others.length ? `<div class="btn-row" style="margin-top:14px">
+      <select id="who" style="flex:1"><option value="">Inscrire un membre à l’année…</option>${others.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
+      <button class="btn small" id="addenr">Inscrire</button></div>` : ''}
+    ${enrollments.length ? `<p class="small" style="margin-top:14px"><a href="mailto:?bcc=${encodeURIComponent(enrollments.map((e) => e.email).join(','))}">✉ Écrire aux inscrit·es de ce créneau</a></p>` : ''}`, (m, close) => {
+    const reopen = () => { close(); after && after(); enrollmentsModal(t, after); };
+    const add = m.querySelector('#addenr');
+    if (add) add.onclick = async () => {
+      const uid = m.querySelector('#who').value;
+      if (!uid) return;
+      try { const r = await api(`/api/admin/templates/${t.id}/enrollments`, { method: 'POST', body: { user_id: Number(uid) } }); toast(`Inscrit·e à partir du ${fmtLong(r.start_date)}`); reopen(); }
+      catch (err) { toast(err.message, true); }
+    };
+    m.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-end]');
+      if (!b) return;
+      try { await api(`/api/admin/enrollments/${b.dataset.end}`, { method: 'DELETE' }); toast('Inscription à l’année terminée'); reopen(); }
+      catch (err) { toast(err.message, true); }
+    });
+  });
 }
 
 function templateModal(t, after) {
@@ -863,7 +1013,8 @@ async function viewAdminUsers() {
     return list.map((u) => `
       <div class="list-item">
         <div class="grow"><strong>${esc(u.name)}</strong> ${u.role === 'admin' ? '<span class="badge plum">Admin</span>' : ''} ${u.active ? '' : '<span class="badge danger">Désactivé</span>'}
-          <div class="small muted">${esc(u.email)}${u.phone ? ` · <a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''} · ${plural(u.upcoming, 'séance')} à venir</div></div>
+          <div class="small muted">${esc(u.email)}${u.phone ? ` · <a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''} </div>
+          <div class="small">${u.slots.length ? u.slots.map(esc).join(' · ') : '<span class="muted">Pas de créneau à l’année</span>'} · <b>${plural(u.credits, 'rattrapage')}</b></div></div>
         <button class="btn secondary small" data-user="${u.id}">Détails</button>
       </div>`).join('') || '<p class="muted">Aucun résultat.</p>';
   };
@@ -884,7 +1035,11 @@ async function viewAdminUsers() {
     modal(`
       <div class="modal-head"><h2>${esc(u.name)}</h2><button class="icon-btn" data-close aria-label="Fermer">✕</button></div>
       <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''}<br><span class="muted">Inscrit·e le ${new Date(u.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}</span></p>
-      <h3>Séances à venir (${up.length})</h3>
+      <h3>Créneau à l'année</h3>
+      <p class="small">${u.slots.length ? u.slots.map(esc).join('<br>') : '<span class="muted">Aucun (inscription depuis « Cours réguliers »)</span>'}</p>
+      <h3>Rattrapages disponibles</h3>
+      <div class="btn-row" style="margin-bottom:12px"><button class="icon-btn" id="cminus" aria-label="Retirer un rattrapage">−</button><strong id="cval" style="font-size:1.3rem;min-width:40px;text-align:center">${u.credits}</strong><button class="icon-btn" id="cplus" aria-label="Ajouter un rattrapage">+</button><span class="small muted">(ex. séance offerte, carnet)</span></div>
+      <h3>Rattrapages réservés (${up.length})</h3>
       ${up.length ? up.map((x) => `<div class="small">${x.cancelled ? '❌' : '•'} ${fmtLong(x.date)} ${x.start_time.replace(':', 'h')} — ${esc(x.title)}</div>`).join('') : '<p class="small muted">Aucune.</p>'}
       <h3 style="margin-top:12px">Séances passées</h3><p class="small">${past.filter((x) => !x.cancelled).length} séance(s) suivie(s)</p>
       ${u.id !== state.user.id ? `<div class="btn-row" style="margin-top:16px">
@@ -895,6 +1050,13 @@ async function viewAdminUsers() {
         try { await api(`/api/admin/users/${u.id}`, { method: 'PUT', body }); close(); toast('Membre mis à jour'); viewAdminUsers(); }
         catch (err) { toast(err.message, true); }
       };
+      const adj = async (delta) => {
+        try { const r = await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { delta } }); u.credits = r.credits; m.querySelector('#cval').textContent = r.credits; }
+        catch (err) { toast(err.message, true); }
+      };
+      m.querySelector('#cminus').onclick = () => adj(-1);
+      m.querySelector('#cplus').onclick = () => adj(1);
+      m.addEventListener('click', (ev) => { if (ev.target.closest('[data-close]')) viewAdminUsers(); });
       const r = m.querySelector('#role'); if (r) r.onclick = () => upd({ role: u.role === 'admin' ? 'member' : 'admin' });
       const a = m.querySelector('#act'); if (a) a.onclick = () => upd({ active: !u.active });
     });
@@ -909,12 +1071,17 @@ async function viewAdminSettings() {
     <h1>Réglages</h1>
     <form class="card" id="f">
       <div class="field"><label>Nom affiché</label><input name="studio_name" value="${esc(s.studio_name)}"></div>
-      <div class="field"><label>Délai minimum pour annuler ou déplacer (heures)</label><input type="number" min="0" name="cancel_deadline_hours" value="${esc(s.cancel_deadline_hours)}">
-        <p class="small muted">Ex. 12 : impossible d'annuler moins de 12 h avant la séance. 0 = toujours possible.</p></div>
+      <div class="field"><label>Délai pour libérer sa place avec rattrapage (heures)</label><input type="number" min="0" name="cancel_deadline_hours" value="${esc(s.cancel_deadline_hours)}">
+        <p class="small muted">Ex. 12 : libérer sa place moins de 12 h avant ne donne pas de rattrapage, et un rattrapage ne peut plus être déplacé. 0 = toujours possible.</p></div>
       <div class="field"><label>Ouverture des réservations (jours à l'avance)</label><input type="number" min="0" name="booking_horizon_days" value="${esc(s.booking_horizon_days)}">
         <p class="small muted">Ex. 120 : on peut réserver jusqu'à 4 mois à l'avance. 0 = sans limite (toute l'année).</p></div>
-      <div class="field"><label>Nombre maximum de réservations à venir par personne</label><input type="number" min="0" name="max_active_bookings" value="${esc(s.max_active_bookings)}">
-        <p class="small muted">0 = illimité. Utile pour une formule « 1 cours par semaine » (mettre 2 ou 3).</p></div>
+      <div class="field"><label>Nombre maximum de rattrapages réservés à l'avance par personne</label><input type="number" min="0" name="max_active_bookings" value="${esc(s.max_active_bookings)}">
+        <p class="small muted">0 = illimité.</p></div>
+      <h2>Créneaux à l'année</h2>
+      <div class="field"><label class="check"><input type="checkbox" name="allow_self_enroll" ${s.allow_self_enroll === '1' ? 'checked' : ''}>Les élèves choisissent eux-mêmes leur créneau à l'année</label>
+        <p class="small muted">Sinon, c'est vous qui les inscrivez depuis « Cours réguliers ».</p></div>
+      <div class="field"><label class="check"><input type="checkbox" name="makeup_requires_credit" ${s.makeup_requires_credit === '1' ? 'checked' : ''}>Une place libre ne se réserve qu'avec un rattrapage</label>
+        <p class="small muted">Un rattrapage s'obtient en libérant sa place à temps, ou quand vous annulez un cours. Décochez pour laisser réserver librement les places libres.</p></div>
       <button class="btn">Enregistrer</button>
     </form>`;
   const f = $view.querySelector('#f');
@@ -930,6 +1097,8 @@ async function refreshMe() {
   const r = await api('/api/me');
   state.user = r.user;
   state.settings = r.settings;
+  state.credits = r.credits;
+  state.enrollments = r.enrollments;
   document.title = `${r.settings.studio_name} — Réservations`;
 }
 

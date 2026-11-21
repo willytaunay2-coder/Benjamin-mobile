@@ -1,5 +1,5 @@
 // Service worker : l'interface reste disponible hors ligne, les données passent toujours par le réseau.
-const CACHE = 'nada-atma-v1';
+const CACHE = 'nada-atma-v2';
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/icon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
