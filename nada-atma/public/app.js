@@ -355,9 +355,11 @@ function slotBanner() {
   if (!state.enrollments.length) {
     return `<div class="slot-banner"><div><strong>Votre cours de la semaine</strong><div class="small">Votre professeure vous attribue votre créneau. En attendant, vous pouvez prendre une place libre.</div></div></div>`;
   }
-  const e = state.enrollments[0];
+  const e = state.enrollments.find((x) => x.start_date <= today()) || state.enrollments[0];
+  const nx = state.enrollments.find((x) => x !== e && x.start_date > today());
+  const later = nx ? `<div class="small">À partir du ${fmtLong(nx.start_date)} : ${DAYS[nx.weekday]} ${hm(nx.start_time)}.</div>` : '';
   return `<div class="slot-banner"><div><div class="small muted">Votre cours de la semaine</div><strong>${DAYS[e.weekday]} ${hm(e.start_time)} · ${esc(e.title)}</strong>
-    <div class="small">Un empêchement ? Annulez : votre place sera proposée aux autres élèves.</div></div></div>`;
+    ${later}<div class="small">Un empêchement ? Annulez : votre place sera proposée aux autres élèves.</div></div></div>`;
 }
 
 function weekHtml(from, data, { admin = false } = {}) {
@@ -746,7 +748,7 @@ async function viewAdminSessions() {
 }
 
 async function sessionDetailModal(id, after) {
-  const [{ session: s, attendees, absent }, { users }] = await Promise.all([api(`/api/admin/sessions/${id}`), api('/api/admin/users')]);
+  const [{ session: s, attendees, absent }, { users }, { templates }] = await Promise.all([api(`/api/admin/sessions/${id}`), api('/api/admin/users'), api('/api/admin/templates')]);
   const others = users.filter((u) => u.active && !attendees.some((a) => a.id === u.id) && !absent.some((a) => a.id === u.id));
   const kindBadge = { regular: '<span class="badge">À l’année</span>', makeup: '<span class="badge ok">Place libre</span>' };
   const personRow = (a, btn) => `<div class="list-item"><div class="grow"><strong>${esc(a.name)}</strong> ${kindBadge[a.kind] || ''}<div class="small muted">${esc(a.email)}${a.phone ? ` · <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>` : ''}</div></div>${btn}</div>`;
@@ -758,7 +760,7 @@ async function sessionDetailModal(id, after) {
     <h3>Participant·es</h3>
     ${attendees.length ? attendees.map((a) => personRow(a, a.kind === 'makeup'
       ? `<button class="btn ghost small" data-unbook="${a.booking_id}">Retirer</button>`
-      : `<button class="btn ghost small" data-absent="${a.id}">Absent·e</button>`)).join('') : '<p class="muted small">Personne pour le moment.</p>'}
+      : `<span class="btn-row tight"><button class="btn ghost small" data-slot="${a.id}">Changer son créneau</button><button class="btn ghost small" data-absent="${a.id}">Absent·e</button></span>`)).join('') : '<p class="muted small">Personne pour le moment.</p>'}
     ${absent.length ? `<h3 style="margin-top:14px">Places libérées (${absent.length})</h3>${absent.map((a) => personRow(a, `<button class="btn ghost small" data-present="${a.id}">Remettre</button>`)).join('')}` : ''}
     ${!s.cancelled && !s.is_past && s.spots_left > 0 && others.length ? `
       <div class="btn-row" style="margin:10px 0 18px">
@@ -774,6 +776,8 @@ async function sessionDetailModal(id, after) {
     </div>`, (m, close) => {
     const reopen = () => { after && after(); sessionDetailModal(id, after); };
     m.addEventListener('click', async (e) => {
+      const sl = e.target.closest('[data-slot]');
+      if (sl) { const who = users.find((x) => String(x.id) === sl.dataset.slot); if (who) studentModal(who, templates, after); return; }
       const u = e.target.closest('[data-unbook]');
       if (u) {
         try { await api(`/api/bookings/${u.dataset.unbook}/cancel`, { method: 'POST' }); toast('Participant·e retiré·e'); reopen(); }
@@ -1438,37 +1442,56 @@ async function viewAdminUsers() {
   $view.onclick = (e) => {
     const b = e.target.closest('[data-user]');
     if (!b) return;
-    const u = users.find((x) => String(x.id) === b.dataset.user);
-    const cur = templates.find((t) => u.slot_ids.includes(t.id));
-    modal(`
-      <div class="modal-head"><h2>${esc(u.name)}</h2>${CLOSE_X}</div>
-      <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''}</p>
-      <div class="field"><label for="slot">Cours de la semaine (à l’année)</label><select id="slot">${slotOptions(templates, cur?.id || null)}</select></div>
-      <div class="btn-row"><button class="btn" id="save">Enregistrer le créneau</button></div>
-      <h3 style="margin-top:20px">Compte</h3>
-      <div class="btn-row">
-        <button class="btn secondary small" id="pw">Nouveau mot de passe</button>
-        ${u.id !== state.user.id ? `<button class="btn ${u.active ? 'danger' : 'ok'} small" id="act">${u.active ? 'Désactiver' : 'Réactiver'}</button>` : ''}
-      </div>`, (m, close) => {
-      m.querySelector('#save').onclick = async () => {
-        const id = Number(m.querySelector('#slot').value) || null;
-        try {
-          await api(`/api/admin/users/${u.id}/slot`, { method: 'PUT', body: { template_id: id } });
-          close(); toast(id ? 'Créneau enregistré, l’élève est prévenu·e' : 'Créneau retiré'); viewAdminUsers();
-        } catch (err) { toast(err.message, true); }
-      };
-      m.querySelector('#pw').onclick = async () => {
-        if (!(await confirmBox(`Créer un nouveau mot de passe pour ${esc(u.name)} ? Il lui sera envoyé par e-mail.`, 'Créer'))) return;
-        try { const r = await api(`/api/admin/users/${u.id}/password`, { method: 'POST', body: {} }); passwordModal(u.name, u.email, r.temp_password, true); }
-        catch (err) { toast(err.message, true); }
-      };
-      const a = m.querySelector('#act');
-      if (a) a.onclick = async () => {
-        try { await api(`/api/admin/users/${u.id}`, { method: 'PUT', body: { active: !u.active } }); close(); toast('Compte mis à jour'); viewAdminUsers(); }
-        catch (err) { toast(err.message, true); }
-      };
-    });
+    studentModal(users.find((x) => String(x.id) === b.dataset.user), templates, viewAdminUsers);
   };
+}
+
+// Fiche d'un·e élève : créneau habituel (modifiable à partir d'une date), compte
+function studentModal(u, templates, after) {
+  const tName = (id) => { const t = templates.find((x) => x.id === id); return t ? `${DAYS[t.weekday]} ${hm(t.start_time)}` : ''; };
+  const ens = u.enrollments || [];
+  const now = ens.find((e) => e.start_date <= today()) || null;
+  const next = ens.find((e) => e.start_date > today()) || null;
+  const current = now || next;
+  const slotNow = now ? `<strong>${tName(now.template_id)}</strong>${now.end_date ? ` <span class="muted">jusqu’au ${fmtLong(now.end_date)}</span>` : ''}` : '<span class="muted">Pas de créneau</span>';
+  modal(`
+    <div class="modal-head"><h2>${esc(u.name)}</h2>${CLOSE_X}</div>
+    <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''}</p>
+    <div class="slot-now"><span class="small muted">Créneau habituel</span><div>${slotNow}</div>
+      ${next ? `<div class="small">puis <strong>${tName(next.template_id)}</strong> à partir du ${fmtLong(next.start_date)}</div>` : ''}</div>
+    <h3>Changer le créneau habituel</h3>
+    <div class="grid2">
+      <div class="field"><label for="slot">Nouveau créneau</label><select id="slot">${slotOptions(templates, current ? current.template_id : null)}</select></div>
+      <div class="field"><label for="slot-from">À partir du</label><input id="slot-from" type="date" value="${today()}" min="${today()}"></div>
+    </div>
+    <p class="small muted">L’élève est prévenu·e. Ses séances avant cette date ne changent pas.</p>
+    <div class="btn-row"><button class="btn" id="save">Changer le créneau</button></div>
+    <h3 style="margin-top:20px">Compte</h3>
+    <div class="btn-row">
+      <button class="btn secondary small" id="pw">Nouveau mot de passe</button>
+      ${u.id !== state.user.id ? `<button class="btn ${u.active ? 'danger' : 'ok'} small" id="act">${u.active ? 'Désactiver' : 'Réactiver'}</button>` : ''}
+    </div>`, (m, close) => {
+    m.querySelector('#save').onclick = async () => {
+      const id = Number(m.querySelector('#slot').value) || null;
+      const from = m.querySelector('#slot-from').value || today();
+      try {
+        const r = await api(`/api/admin/users/${u.id}/slot`, { method: 'PUT', body: { template_id: id, from } });
+        close();
+        toast(r.unchanged ? 'C’est déjà son créneau' : id ? `Créneau changé à partir du ${fmtLong(r.start_date)} — l’élève est prévenu·e` : 'Créneau retiré');
+        after && after();
+      } catch (err) { toast(err.message, true); }
+    };
+    m.querySelector('#pw').onclick = async () => {
+      if (!(await confirmBox(`Créer un nouveau mot de passe pour ${esc(u.name)} ? Il lui sera envoyé par e-mail.`, 'Créer'))) return;
+      try { const r = await api(`/api/admin/users/${u.id}/password`, { method: 'POST', body: {} }); passwordModal(u.name, u.email, r.temp_password, true); }
+      catch (err) { toast(err.message, true); }
+    };
+    const a = m.querySelector('#act');
+    if (a) a.onclick = async () => {
+      try { await api(`/api/admin/users/${u.id}`, { method: 'PUT', body: { active: !u.active } }); close(); toast('Compte mis à jour'); after && after(); }
+      catch (err) { toast(err.message, true); }
+    };
+  });
 }
 
 async function viewAdminSettings() {

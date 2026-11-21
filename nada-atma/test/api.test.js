@@ -341,13 +341,20 @@ test('la professeure crée un compte élève avec son créneau, le change, réin
   assert.equal(me.enrollments.length, 1);
   assert.equal(me.enrollments[0].status, 'confirmed');
 
-  // Changement de créneau : mardi → jeudi
-  r = await admin('PUT', `/api/admin/users/${uid}/slot`, { template_id: jeu.id });
+  // Changement de créneau habituel : mardi → jeudi, à partir du lundi 14 septembre
+  r = await admin('PUT', `/api/admin/users/${uid}/slot`, { template_id: jeu.id, from: '2026-09-14' });
   assert.equal(r.status, 200);
+  assert.equal(r.data.start_date, '2026-09-14');
   me = (await eve('GET', '/api/me')).data;
-  assert.deepEqual(me.enrollments.map((e) => e.weekday), [4]);
-  const thu = (await eve('GET', '/api/sessions?from=2026-09-10&to=2026-09-10')).data.sessions[0];
-  assert.equal(thu.my_status, 'enrolled');
+  // le mardi jusqu'au 13, puis le jeudi
+  assert.deepEqual(me.enrollments.map((e) => [e.weekday, e.start_date, e.end_date]), [[2, '2026-09-04', '2026-09-13'], [4, '2026-09-14', null]]);
+  const st = async (d) => (await eve('GET', `/api/sessions?from=${d}&to=${d}`)).data.sessions[0].my_status;
+  assert.equal(await st('2026-09-08'), 'enrolled'); // encore le mardi cette semaine
+  assert.equal(await st('2026-09-10'), null);
+  assert.equal(await st('2026-09-15'), null);       // plus le mardi ensuite
+  assert.equal(await st('2026-09-17'), 'enrolled'); // le jeudi désormais
+  assert.match((await eve('GET', '/api/notifications')).data.notifications[0].body, /jeudi 12h15 à partir du lundi 14 septembre/);
+  assert.equal((await admin('PUT', `/api/admin/users/${uid}/slot`, { template_id: mar.id, from: 'demain' })).status, 400);
 
   // Nouveau mot de passe : l'ancienne session est fermée
   r = await admin('POST', `/api/admin/users/${uid}/password`, { send_email: false });
@@ -391,6 +398,9 @@ test('un cours par semaine : pas de deuxième inscription la même semaine', asy
 
   // Eve (sans créneau) : une place libre par semaine
   assert.equal((await eve('POST', `/api/sessions/${tue.id}/book`)).status, 200);
+  // La professeure est prévenue de l'inscription
+  const profN = (await admin('GET', '/api/notifications')).data.notifications;
+  assert.ok(profN.some((n) => n.title === 'Eve s’inscrit mardi 8 septembre à 19h' && /1 \/ 2 places occupées/.test(n.body) && n.link === '#/admin/jour?date=2026-09-08'));
   assert.equal((await eve('POST', `/api/sessions/${thu.id}/book`)).status, 409);
   // La semaine suivante, c'est de nouveau possible
   const thu2 = (await admin('GET', '/api/sessions?from=2026-09-17&to=2026-09-17')).data.sessions[0];

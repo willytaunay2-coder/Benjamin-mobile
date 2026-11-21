@@ -625,3 +625,8 @@ table.roll .sign { width: 28%; }
 .push-invite > .i { width: 22px; height: 22px; color: var(--plum); flex-shrink: 0; }
 .push-invite .grow { flex: 1 1 180px; min-width: 0; }
 .push-invite strong { color: var(--ink); }
+
+/* Fiche élève */
+.slot-now { padding: 12px 14px; margin: 4px 0 14px; border-radius: 16px; background: var(--plum-soft); display: flex; flex-direction: column; gap: 3px; }
+.slot-now strong { color: var(--plum); }
+.btn-row.tight { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
