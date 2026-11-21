@@ -76,3 +76,8 @@
 .demo-mail-empty { padding: 18px 0; color: #7a7084; font-size: 14px; }
 
 .demo-title::after { display: none; }
+.demo-sms { border-top: 1px solid rgba(91, 66, 80, .12); padding: 14px 0; display: flex; flex-direction: column; gap: 8px; }
+.demo-bubble { margin: 0; align-self: flex-start; max-width: 92%; padding: 10px 14px; border-radius: 18px 18px 18px 6px; background: #e9e9ee; color: #1d1d1f; font: 14px/1.45 -apple-system, system-ui, sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
+.demo-kind { display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px; background: #e7f3ed; color: #2f7356; font: 700 10px 'Josefin Sans', sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+.demo-kind.mail { background: #f6edf2; color: #8e3b6b; }
+.demo-mail summary .demo-mail-t { order: -1; }

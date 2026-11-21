@@ -5,6 +5,7 @@ const path = require('node:path');
 const { tx } = require('./db');
 const D = require('./dates');
 const { createMailer } = require('./mailer');
+const { createSms, toInternational } = require('./sms');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const TOKEN_TTL_MS = 60 * 24 * 3600 * 1000; // 60 jours
@@ -80,6 +81,7 @@ function createApp(db, opts = {}) {
   const cookieSecure = !!opts.cookieSecure;
   const now = opts.now || (() => new Date());
   const mailer = opts.mailer || createMailer();
+  const sms = opts.sms || createSms();
   const appUrl = (opts.appUrl || process.env.APP_URL || '').replace(/\/$/, '');
 
   const q = (sql) => db.prepare(sql);
@@ -87,7 +89,7 @@ function createApp(db, opts = {}) {
   const settingNum = (k) => Number(settings()[k] || 0);
 
   function publicUser(u) {
-    return u && { id: u.id, email: u.email, name: u.name, phone: u.phone, role: u.role, active: !!u.active, created_at: u.created_at, notify_email: u.notify_email !== 0 };
+    return u && { id: u.id, email: u.email, name: u.name, phone: u.phone, role: u.role, active: !!u.active, created_at: u.created_at, notify_email: u.notify_email !== 0, notify_sms: u.notify_sms !== 0 };
   }
 
   // ---------- Alertes (cloche) + e-mails ----------
@@ -100,13 +102,21 @@ function createApp(db, opts = {}) {
   // userIds : destinataires ; email : envoyer aussi un e-mail (si la personne l'accepte)
   function notify(userIds, { kind, title, body = '', link = '' }, email = true) {
     const ins = q('INSERT INTO notifications(user_id, kind, title, body, link) VALUES (?,?,?,?,?)');
-    const mails = [];
-    const studio = settings().studio_name || 'Nada Atma';
+    const mails = [], texts = [];
+    const st = settings();
+    const studio = st.studio_name || 'Nada Atma';
+    // SMS : toutes les alertes, seulement les changements de cours (pas les places libres), ou jamais
+    const mode = st.sms_mode || 'all';
+    const textOk = mode === 'all' || (mode === 'changes' && kind !== 'place');
+    const url = appUrl ? ` ${appUrl}/${link}` : '';
+    const smsText = kind === 'place' ? `${studio} : ${title}. Inscrivez-vous dans l'appli${url}` : `${studio} : ${title}.${url}`;
     for (const id of new Set(userIds)) {
       ins.run(id, kind, title, body, link);
       if (!email) continue;
-      const u = q('SELECT email, name, notify_email, active FROM users WHERE id = ?').get(id);
-      if (!u || !u.active || !u.notify_email) continue;
+      const u = q('SELECT email, name, phone, notify_email, notify_sms, active FROM users WHERE id = ?').get(id);
+      if (!u || !u.active) continue;
+      if (textOk && u.notify_sms && toInternational(u.phone)) texts.push({ to: u.phone, text: smsText });
+      if (!u.notify_email) continue;
       mails.push({
         to: u.email,
         subject: `${studio} — ${title}`,
@@ -114,6 +124,7 @@ function createApp(db, opts = {}) {
       });
     }
     mailer.sendLater(mails);
+    sms.sendLater(texts);
   }
   const adminIds = () => q("SELECT id FROM users WHERE role = 'admin' AND active = 1").all().map((r) => r.id);
 
@@ -586,6 +597,7 @@ function createApp(db, opts = {}) {
     const phone = body.phone === undefined ? user.phone : str(body.phone, 30);
     q('UPDATE users SET name = ?, phone = ? WHERE id = ?').run(name, phone, user.id);
     if (body.notify_email !== undefined) q('UPDATE users SET notify_email = ? WHERE id = ?').run(body.notify_email ? 1 : 0, user.id);
+    if (body.notify_sms !== undefined) q('UPDATE users SET notify_sms = ? WHERE id = ?').run(body.notify_sms ? 1 : 0, user.id);
     if (body.new_password) {
       if (!verifyPassword(String(body.current_password || ''), user.password_hash)) fail(400, 'Mot de passe actuel incorrect');
       if (String(body.new_password).length < 8) fail(400, 'Le nouveau mot de passe doit contenir au moins 8 caractères');
@@ -980,8 +992,12 @@ function createApp(db, opts = {}) {
     mailer.sendLater([{
       to: u.email,
       subject: `${studio} — votre compte est prêt`,
-      text: `Bonjour ${firstName(u.name)},\n\nVotre compte ${studio} est créé.${slotText ? `\nVotre cours de la semaine : ${slotText}.` : ''}\n\nPour vous connecter${appUrl ? ` : ${appUrl}/` : ''}\nE-mail : ${u.email}\nMot de passe provisoire : ${pw}\n\nVous pourrez le changer dans votre profil. Si vous ne pouvez pas venir à un cours, libérez votre place dans l'application : les autres élèves seront prévenu·es.\n\nÀ bientôt sur le tapis,\n${studio}`,
+      text: `Bonjour ${firstName(u.name)},\n\nVotre compte ${studio} est créé.${slotText ? `\nVotre cours de la semaine : ${slotText}.` : ''}\n\nPour vous connecter${appUrl ? ` : ${appUrl}/` : ''}\nE-mail : ${u.email}\nMot de passe provisoire : ${pw}\n\nVous pourrez le changer dans votre profil. Si vous ne pouvez pas venir à un cours, annulez-le dans l'application : votre place sera proposée aux autres élèves.\n\nÀ bientôt sur le tapis,\n${studio}`,
     }]);
+    // Et par SMS, si un numéro est connu et que les SMS sont activés
+    if ((settings().sms_mode || 'all') !== 'off' && toInternational(u.phone)) {
+      sms.sendLater([{ to: u.phone, text: `${studio} : bonjour ${firstName(u.name)}, votre compte est pret.${slotText ? ` Votre cours : ${slotText.split(',')[0]}.` : ''} Connexion${appUrl ? ` ${appUrl}/` : ''} avec ${u.email}, mot de passe provisoire ${pw}` }]);
+    }
   }
   const slotLabel = (t) => `${DAY_NAMES[t.weekday]} ${hhmm(t.start_time)}`;
 
@@ -1053,7 +1069,7 @@ function createApp(db, opts = {}) {
   }), 'admin');
 
   // Réglages
-  route('GET', '/api/admin/settings', async () => ({ settings: settings() }), 'admin');
+  route('GET', '/api/admin/settings', async () => ({ settings: settings(), sms_ready: !!sms.live }), 'admin');
   route('PUT', '/api/admin/settings', async ({ body }) => {
     const up = q('UPDATE settings SET value = ? WHERE key = ?');
     if (body.studio_name !== undefined) up.run(str(body.studio_name, 100) || 'Nada Atma', 'studio_name');
@@ -1063,6 +1079,7 @@ function createApp(db, opts = {}) {
     if (body.skip_public_holidays !== undefined) up.run(body.skip_public_holidays ? '1' : '0', 'skip_public_holidays');
     if (body.makeup_requires_credit !== undefined) up.run(body.makeup_requires_credit ? '1' : '0', 'makeup_requires_credit');
     if (body.allow_self_enroll !== undefined) up.run(body.allow_self_enroll ? '1' : '0', 'allow_self_enroll');
+    if (['all', 'changes', 'off'].includes(body.sms_mode)) up.run(body.sms_mode, 'sms_mode');
     return { settings: settings() };
   }, 'admin');
 

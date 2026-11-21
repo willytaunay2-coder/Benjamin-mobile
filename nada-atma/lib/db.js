@@ -133,13 +133,15 @@ INSERT OR IGNORE INTO settings(key, value) VALUES
   ('max_active_bookings', '0'),
   ('skip_public_holidays', '1'),
   ('makeup_requires_credit', '0'),
-  ('allow_self_enroll', '0');
+  ('allow_self_enroll', '0'),
+  ('sms_mode', 'all');
 `;
 
 function migrate(db) {
   const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!cols.includes('credit_adjust')) db.exec('ALTER TABLE users ADD COLUMN credit_adjust INTEGER NOT NULL DEFAULT 0');
   if (!cols.includes('notify_email')) db.exec('ALTER TABLE users ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1');
+  if (!cols.includes('notify_sms')) db.exec('ALTER TABLE users ADD COLUMN notify_sms INTEGER NOT NULL DEFAULT 1');
   const ecols = db.prepare('PRAGMA table_info(enrollments)').all().map((c) => c.name);
   // 'pending' : inscrit·e d'office par la professeure, en attente de validation par l'élève
   if (!ecols.includes('status')) db.exec("ALTER TABLE enrollments ADD COLUMN status TEXT NOT NULL DEFAULT 'confirmed'");

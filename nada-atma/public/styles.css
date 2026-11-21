@@ -202,7 +202,7 @@ input, select, textarea {
 }
 input::placeholder, textarea::placeholder { color: #a79fae; }
 input[type=color] { padding: 4px; width: 60px; }
-input[type=checkbox] { width: 20px; height: 20px; min-height: 0; margin: 0 10px 0 0; accent-color: var(--plum); flex-shrink: 0; }
+input[type=checkbox], input[type=radio] { width: 20px; height: 20px; min-height: 0; margin: 0 10px 0 0; accent-color: var(--plum); flex-shrink: 0; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--plum); box-shadow: 0 0 0 4px rgba(142, 59, 107, .12); }
 .field { margin-bottom: 16px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -575,3 +575,19 @@ table.roll .sign { width: 28%; }
 .confirm-slot { display: flex; align-items: center; gap: 14px; padding: 14px; margin: 4px 0 12px; border-radius: 18px; background: var(--plum-soft); }
 .confirm-slot .day-time { background: #fff; }
 .week-taken { font-style: italic; text-align: right; }
+
+/* Alertes par SMS */
+.notify-set { border: 0; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 8px; }
+.notify-set legend { padding: 0; margin-bottom: 8px; font-weight: 700; font-size: .88rem; color: var(--ink); }
+.notify-set p { margin: 0; }
+.radio-cards { display: grid; gap: 10px; margin: 12px 0; }
+@media (min-width: 760px) { .radio-cards { grid-template-columns: repeat(3, 1fr); } }
+.radio-card { display: flex; gap: 10px; align-items: flex-start; padding: 14px; border: 1px solid var(--line-strong); border-radius: 16px; cursor: pointer; background: #fff; transition: border-color .2s, background .2s; }
+.radio-card input { margin: 1px 0 0; padding: 0; }
+.radio-card > span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.radio-card strong { font-size: .92rem; color: var(--ink); }
+.radio-card.on { border-color: var(--plum); background: var(--plum-soft); }
+.radio-card:focus-within { outline: 2px solid var(--plum); outline-offset: 2px; }
+.sms-ok, .sms-off { padding: 10px 14px; border-radius: 14px; margin: 6px 0 0; }
+.sms-ok { background: var(--ok-soft); color: var(--ok); }
+.sms-off { background: var(--warn-soft); color: var(--warn); }

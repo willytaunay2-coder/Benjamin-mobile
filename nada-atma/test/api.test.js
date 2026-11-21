@@ -7,6 +7,7 @@ const http = require('node:http');
 const { openDb } = require('../lib/db');
 const { createApp } = require('../lib/app');
 const { createMailer } = require('../lib/mailer');
+const { createSms, toInternational, gsmText } = require('../lib/sms');
 const D = require('../lib/dates');
 
 // Horloge figée : vendredi 4 septembre 2026, 10h
@@ -17,7 +18,8 @@ const myBookings = (ss) => ss.filter((s) => s.my_status === 'booked').map((s) =>
 async function start() {
   const db = openDb(':memory:');
   const mailer = createMailer({ MAIL_SILENT: '1' });
-  const server = http.createServer(createApp(db, { now: () => NOW, mailer }));
+  const sms = createSms({ SMS_SILENT: '1' });
+  const server = http.createServer(createApp(db, { now: () => NOW, mailer, sms, appUrl: 'https://resa.example' }));
   await new Promise((r) => server.listen(0, r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const client = () => {
@@ -33,7 +35,7 @@ async function start() {
       return { status: res.status, data: await res.json() };
     };
   };
-  return { db, server, client, mailer };
+  return { db, server, client, mailer, sms };
 }
 
 test('dates : jours fériés et Pâques', () => {
@@ -394,4 +396,59 @@ test('un cours par semaine : pas de deuxième inscription la même semaine', asy
   const bobId = (await bob('GET', '/api/me')).data.user.id;
   const tue2 = (await admin('GET', '/api/sessions?from=2026-09-15&to=2026-09-15')).data.sessions[0];
   assert.equal((await admin('POST', `/api/admin/sessions/${tue2.id}/attendees`, { user_id: bobId })).status, 200);
+});
+
+test('alertes par SMS : places libres, changements, préférence de chaque élève', async (t) => {
+  assert.equal(toInternational('06 12 34 56 78'), '33612345678');
+  assert.equal(toInternational('+32 470 12 34 56'), '32470123456');
+  assert.equal(toInternational('12'), '');
+  assert.equal(gsmText('Une place est libre jeudi · « vite » — l’appli'), 'Une place est libre jeudi - "vite" - l\'appli');
+
+  NOW = new Date(2026, 8, 4, 10, 0);
+  const { server, client, sms } = await start();
+  t.after(() => server.close());
+  const admin = client(), alice = client(), bob = client(), carol = client();
+  await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2026-12-31' })).data.template;
+  const make = async (c, name, phone, slot) => {
+    const r = await admin('POST', '/api/admin/users', { name, email: `${name.toLowerCase()}@example.com`, phone, template_id: slot });
+    await c('POST', '/api/login', { email: `${name.toLowerCase()}@example.com`, password: r.data.temp_password });
+  };
+  await make(alice, 'Alice', '06 11 11 11 11', mar.id);
+  await make(bob, 'Bob', '06 22 22 22 22', null);
+  await make(carol, 'Carol', '', null); // pas de numéro : pas de SMS
+  await new Promise((r) => setTimeout(r, 30));
+  // Identifiants envoyés aussi par SMS
+  assert.ok(sms.sent.some((m) => m.to === '33611111111' && /votre compte est pret/.test(m.text) && /mardi 19h/.test(m.text)));
+  sms.sent.length = 0;
+
+  // Alice annule : Bob reçoit un SMS (Carol n'a pas de numéro)
+  const tue = (await admin('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0];
+  await alice('POST', `/api/sessions/${tue.id}/release`);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(sms.sent.map((m) => m.to), ['33622222222']);
+  assert.match(sms.sent[0].text, /^Nada Atma : Une place est libre mardi 8 septembre à 19h\. Inscrivez-vous dans l'appli https:\/\/resa\.example\/#\/planning/);
+  assert.ok(sms.sent[0].text.length <= 160);
+  sms.sent.length = 0;
+
+  // Réglage « changements seulement » : pas de SMS pour une place libre, mais un pour un cours déplacé
+  assert.equal((await admin('PUT', '/api/admin/settings', { sms_mode: 'changes' })).status, 200);
+  await alice('POST', `/api/sessions/${tue.id}/unrelease`);
+  await alice('POST', `/api/sessions/${tue.id}/release`);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sms.sent.length, 0);
+  await alice('POST', `/api/sessions/${tue.id}/unrelease`);
+  await admin('PUT', `/api/admin/sessions/${tue.id}`, { start_time: '19:30' });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(sms.sent.some((m) => m.to === '33611111111' && /deplacee|déplacée/.test(m.text)));
+  sms.sent.length = 0;
+
+  // Bob ne veut pas de SMS
+  assert.equal((await bob('PUT', '/api/me', { notify_sms: false })).data.user.notify_sms, false);
+  await admin('PUT', '/api/admin/settings', { sms_mode: 'all' });
+  await alice('POST', `/api/sessions/${tue.id}/release`);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sms.sent.length, 0);
+  // Réglage « jamais »
+  assert.equal((await admin('GET', '/api/admin/settings')).data.settings.sms_mode, 'all');
 });

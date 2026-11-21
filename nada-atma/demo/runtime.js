@@ -92,6 +92,17 @@
     if (name === 'node:fs') return {};
     if (name === 'node:sqlite') return { DatabaseSync };
     if (name === './mailer') return mailerModule;
+    if (name === './sms') {
+      // Le vrai module (format des numéros, alphabet SMS), avec un envoi simulé dans la boîte de démo
+      const real = loadModule('./sms');
+      return { ...real, createSms() {
+        return { live: true, sent: [], async send(m) { DEMO.outbox.push({ kind: 'sms', to: real.toInternational(m.to), text: real.gsmText(m.text), at: Date.now() }); },
+          sendLater(list) { for (const m of list) { const to = real.toInternational(m.to); if (to) DEMO.outbox.push({ kind: 'sms', to, text: real.gsmText(m.text), at: Date.now() }); } saveSoon(); } };
+      } };
+    }
+    return loadModule(name);
+  }
+  function loadModule(name) {
     if (cache[name]) return cache[name].exports;
     const factory = G.DEMO_MODULES[name];
     if (!factory) throw new Error('Module absent de la démo : ' + name);
@@ -142,7 +153,7 @@
   }
 
   // ---------- Sauvegarde dans le navigateur ----------
-  const KEY = 'nada-atma-demo-v2';
+  const KEY = 'nada-atma-demo-v3';
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
   function save() {
@@ -214,7 +225,7 @@
     if (ma12) await as('Nina Blanc', `/api/sessions/${ma12.id}/release`);
     if (ma20) { await as('Rose Dupuis', `/api/sessions/${ma20.id}/release`); await as('Lina Mercier', `/api/sessions/${ma20.id}/book`); }
     if (je18) await as('Jade Boyer', `/api/sessions/${je18.id}/release`);
-    DEMO.outbox = DEMO.outbox.filter((m) => /katia|prof@/.test(m.to)); // garder la boîte des deux personnes de la démo
+    DEMO.outbox = DEMO.outbox.filter((m) => /katia|prof@|^33612345678$|^33600000000$/.test(m.to)); // garder les messages des deux personnes de la démo
     DEMO.cookie = '';
     DEMO.seededOn = today;
   }

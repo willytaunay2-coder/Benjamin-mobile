@@ -4,8 +4,8 @@
   const D = window.NADA_DEMO;
   const $ = (id) => document.getElementById(id);
   const PERSONAS = {
-    katia: { who: 'Katia Picquet · élève', email: 'katia.picquet@exemple.fr', home: '#/planning', other: 'prof', switchTo: 'Côté professeure' },
-    prof: { who: 'Professeure', email: 'prof@nada-atma.demo', home: '#/admin', other: 'katia', switchTo: 'Côté élève' },
+    katia: { who: 'Katia Picquet · élève', email: 'katia.picquet@exemple.fr', phone: '33612345678', home: '#/planning', other: 'prof', switchTo: 'Côté professeure' },
+    prof: { who: 'Professeure', email: 'prof@nada-atma.demo', phone: '33600000000', home: '#/admin', other: 'katia', switchTo: 'Côté élève' },
   };
   let app = null;
   D.seen = D.seen || {};
@@ -74,7 +74,7 @@
   }
 
   // ---------- Boîte mail ----------
-  const mails = () => D.role ? D.outbox.filter((m) => m.to === PERSONAS[D.role].email) : [];
+  const mails = () => D.role ? D.outbox.filter((m) => m.to === PERSONAS[D.role].email || (m.kind === 'sms' && m.to === PERSONAS[D.role].phone)) : [];
   function updateMail() {
     const n = mails().length - (D.seen[D.role] || 0);
     const el = $('demo-mail-n');
@@ -90,10 +90,12 @@
   function openMail() {
     const list = mails().slice().reverse();
     const fresh = list.length - (D.seen[D.role] || 0);
-    $('demo-mail-to').textContent = `Reçus par ${PERSONAS[D.role].email}`;
+    $('demo-mail-to').textContent = `SMS au ${PERSONAS[D.role].phone.replace(/^33(\d)(\d\d)(\d\d)(\d\d)(\d\d)$/, '0$1 $2 $3 $4 $5')} et e-mails à ${PERSONAS[D.role].email}`;
     $('demo-mail-list').innerHTML = list.length
-      ? list.map((m, i) => `<details class="demo-mail" ${i < Math.max(fresh, 1) && i === 0 ? 'open' : ''}><summary><span class="demo-mail-s">${esc(m.subject)}</span><span class="demo-mail-t">${when(m.at)}${i < fresh ? ' · nouveau' : ''}</span></summary><pre>${esc(m.text)}</pre></details>`).join('')
-      : `<p class="demo-mail-empty">Aucun e-mail pour l’instant. ${D.role === 'katia' ? 'Passez côté professeure et déplacez ou ajoutez un cours : Katia sera prévenue ici.' : 'Les e-mails des élèves arrivent dans leur propre boîte.'}</p>`;
+      ? list.map((m, i) => m.kind === 'sms'
+        ? `<div class="demo-sms"><span class="demo-mail-t"><span class="demo-kind">SMS</span>${when(m.at)}${i < fresh ? ' · nouveau' : ''}</span><p class="demo-bubble">${esc(m.text)}</p></div>`
+        : `<details class="demo-mail" ${i === 0 ? 'open' : ''}><summary><span class="demo-mail-t"><span class="demo-kind mail">E-mail</span>${when(m.at)}${i < fresh ? ' · nouveau' : ''}</span><span class="demo-mail-s">${esc(m.subject)}</span></summary><pre>${esc(m.text)}</pre></details>`).join('')
+      : `<p class="demo-mail-empty">Aucun message pour l’instant. ${D.role === 'katia' ? 'Passez côté professeure et déplacez ou ajoutez un cours : Katia sera prévenue ici.' : 'Les messages des élèves arrivent sur leur propre téléphone.'}</p>`;
     D.seen[D.role] = mails().length;
     updateMail();
     $('demo-mailbox').hidden = false;

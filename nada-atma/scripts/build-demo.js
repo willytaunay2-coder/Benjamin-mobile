@@ -43,7 +43,7 @@ app = app.replaceAll('location.hash', 'NAV.hash');
 app = `window.startNadaApp = function () {\n${app}\nreturn { state, refreshMe, router, renderNav, toast };\n};`;
 
 // Serveur : chaque fichier de lib/ devient un module
-const mods = ['dates', 'db', 'app'].map((m) =>
+const mods = ['dates', 'db', 'sms', 'app'].map((m) =>
   `${JSON.stringify('./' + m)}: function (module, exports, require, __dirname) {\n${read('lib/' + m + '.js')}\n}`).join(',\n');
 const modules = `window.DEMO_MODULES = {\n${mods}\n};`;
 

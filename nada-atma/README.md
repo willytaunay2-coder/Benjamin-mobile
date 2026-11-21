@@ -73,11 +73,18 @@ professeure, puis ajoutez les cours réguliers et les vacances, et partagez le l
 | `COOKIE_SECURE` | —                      | Mettre `1` en production derrière HTTPS                     |
 | `APP_URL`       | —                      | Adresse publique (ex. `https://reservation.nada-atma.com`), pour les liens des e-mails |
 | `MAIL_FROM`     | —                      | Expéditeur, ex. `Nada Atma <reservations@nada-atma.com>`    |
-| `BREVO_API_KEY` | —                      | Clé API Brevo pour envoyer les e-mails (gratuit jusqu'à 300 e-mails/jour) |
+| `BREVO_API_KEY` | —                      | Clé API Brevo : envoie les e-mails **et les SMS** (e-mails gratuits jusqu'à 300/jour, SMS payants à l'unité) |
+| `SMS_SENDER`    | `NadaAtma`             | Nom affiché à la place du numéro sur les SMS (11 lettres/chiffres max) |
 | `RESEND_API_KEY`| —                      | Alternative à Brevo                                         |
 
-Sans clé d'envoi, les alertes restent visibles dans l'application et les e-mails sont seulement affichés dans la
-console du serveur. Chaque élève peut désactiver les e-mails dans son profil.
+Sans clé d'envoi, les alertes restent visibles dans l'application et les e-mails et SMS sont seulement affichés dans la
+console du serveur. Chaque élève choisit dans son profil : SMS, e-mail, ou les deux.
+
+**SMS.** Avec Brevo, il suffit d'acheter des crédits SMS dans le compte Brevo : la même clé `BREVO_API_KEY` sert
+aux e-mails et aux SMS (envoi « transactionnel » via `POST /v3/transactionalSMS/send`). Dans Gestion › Réglages,
+la professeure choisit : tout par SMS, seulement les changements de cours (les places libres restent par e-mail),
+ou jamais. Une place libérée envoie un SMS à chaque élève qui a un numéro : c'est le poste le plus coûteux.
+Les textes sont gardés dans l'alphabet SMS standard (160 caractères par SMS).
 
 ## Mise en ligne
 

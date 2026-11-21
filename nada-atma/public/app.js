@@ -576,7 +576,11 @@ function viewProfile() {
         <div class="field"><label for="name">Nom</label><input id="name" name="name" value="${esc(u.name)}" required></div>
         <div class="field"><label for="phone">Téléphone</label><input id="phone" name="phone" type="tel" value="${esc(u.phone)}"></div>
       </div>
-      <div class="field"><label class="check"><input type="checkbox" name="notify_email" ${u.notify_email !== false ? 'checked' : ''}>Recevoir aussi les alertes par e-mail (places libres, cours déplacés ou ajoutés)</label></div>
+      <fieldset class="field notify-set"><legend>Être prévenu·e (places libres, cours déplacés ou ajoutés)</legend>
+        <label class="check"><input type="checkbox" name="notify_sms" ${u.notify_sms !== false ? 'checked' : ''}>Par SMS, au numéro ci-dessus</label>
+        <label class="check"><input type="checkbox" name="notify_email" ${u.notify_email !== false ? 'checked' : ''}>Par e-mail</label>
+        <p class="small muted">Les alertes restent toujours visibles dans l’application (la cloche).</p>
+      </fieldset>
       <h3>Changer de mot de passe</h3>
       <div class="grid2">
         <div class="field"><label for="cp">Mot de passe actuel</label><input id="cp" name="current_password" type="password" autocomplete="current-password"></div>
@@ -608,7 +612,7 @@ function viewProfile() {
 // ---------- Administration ----------
 function adminNav(active) {
   const tabs = [
-    ['#/admin', 'Planning'], ['#/admin/cours', 'Cours'], ['#/admin/membres', 'Élèves'], ['#/admin/fermetures', 'Vacances'],
+    ['#/admin', 'Planning'], ['#/admin/cours', 'Cours'], ['#/admin/membres', 'Élèves'], ['#/admin/fermetures', 'Vacances'], ['#/admin/reglages', 'Réglages'],
   ];
   return `<div class="subnav">${tabs.map(([h, l]) => `<a href="${h}" class="chip ${h === active ? 'active' : ''}">${l}</a>`).join('')}</div>`;
 }
@@ -1366,11 +1370,23 @@ async function viewAdminUsers() {
 
 async function viewAdminSettings() {
   loading();
-  const { settings: s } = await api('/api/admin/settings');
+  const [{ settings: s, sms_ready: smsReady }, { users }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/users')]);
+  const reach = users.filter((u) => u.active && u.role === 'member' && u.notify_sms !== false && u.phone.replace(/\D/g, '').length >= 9).length;
+  const mode = s.sms_mode || 'all';
+  const opt = (v, title, desc) => `<label class="radio-card ${mode === v ? 'on' : ''}"><input type="radio" name="sms_mode" value="${v}" ${mode === v ? 'checked' : ''}><span><strong>${title}</strong><span class="small muted">${desc}</span></span></label>`;
   $view.innerHTML = `
     ${adminNav('#/admin/reglages')}
     <h1>Réglages</h1>
     <form class="card" id="f">
+      <h2>Alertes par SMS</h2>
+      <p class="small ${smsReady ? 'sms-ok' : 'sms-off'}">${smsReady ? 'Les SMS sont branchés : ils partent au nom « NadaAtma ».' : 'Les SMS ne sont pas encore branchés : il faut ajouter la clé Brevo au serveur (voir le guide). En attendant, seuls les e-mails et les alertes de l’application partent.'}</p>
+      <div class="radio-cards" role="radiogroup" aria-label="Quand envoyer un SMS">
+        ${opt('all', 'Tout par SMS', 'Places libres, cours déplacés, ajoutés ou annulés, identifiants des nouveaux comptes.')}
+        ${opt('changes', 'Changements de cours seulement', 'Cours déplacés, ajoutés ou annulés et identifiants. Les places libres restent par e-mail et dans l’application.')}
+        ${opt('off', 'Jamais', 'Uniquement e-mails et alertes dans l’application.')}
+      </div>
+      <p class="small muted">${reach} élève${reach > 1 ? 's' : ''} recevr${reach > 1 ? 'aient' : 'ait'} les SMS (numéro renseigné, SMS acceptés). Une place libérée envoie un SMS à chacun·e : chaque SMS est facturé par Brevo, quelques centimes.</p>
+      <h2 style="margin-top:22px">Général</h2>
       <div class="field"><label>Nom affiché</label><input name="studio_name" value="${esc(s.studio_name)}"></div>
       <div class="field"><label>Délai minimum pour annuler une place réservée (heures)</label><input type="number" min="0" name="cancel_deadline_hours" value="${esc(s.cancel_deadline_hours)}">
         <p class="small muted">Concerne les places libres prises ponctuellement. Annuler son cours habituel reste possible jusqu'au début du cours. 0 = toujours possible.</p></div>
@@ -1381,9 +1397,11 @@ async function viewAdminSettings() {
       <button class="btn">Enregistrer</button>
     </form>`;
   const f = $view.querySelector('#f');
+  f.querySelectorAll('input[name=sms_mode]').forEach((r) => { r.onchange = () => f.querySelectorAll('.radio-card').forEach((c) => c.classList.toggle('on', c.querySelector('input').checked)); });
   f.onsubmit = async (e) => {
     e.preventDefault();
-    try { await api('/api/admin/settings', { method: 'PUT', body: formData(f) }); await refreshMe(); toast('Réglages enregistrés'); }
+    const body = formData(f); body.sms_mode = (f.querySelector('input[name=sms_mode]:checked') || {}).value;
+    try { await api('/api/admin/settings', { method: 'PUT', body }); await refreshMe(); toast('Réglages enregistrés'); }
     catch (err) { toast(err.message, true); }
   };
 }
