@@ -241,6 +241,17 @@ async function answerEnrollment(id, accept, after) {
   } catch (e) { toast(e.message, true); }
 }
 
+// Accueil personnalisé : « Bonjour Katia »
+function greetingHtml(sessions) {
+  const first = esc(state.user.name.trim().split(/\s+/)[0]);
+  const h = new Date().getHours();
+  const next = sessions.find((s) => !s.is_past && !s.cancelled && (s.my_status === 'enrolled' || s.my_status === 'booked'));
+  const when = next ? `${fmt(next.date, { weekday: 'long', day: 'numeric', month: 'long' })} à ${next.start_time.replace(/^0/, '').replace(':', 'h').replace(/h00$/, 'h')}` : '';
+  return `<div class="greeting"><p class="hello">${h >= 18 ? 'Bonsoir' : 'Bonjour'} ${first}</p>
+    <h1>Votre planning</h1>
+    ${next ? `<p class="next">Prochain cours : <strong>${when}</strong></p>` : ''}</div>`;
+}
+
 // Bandeau « mon créneau »
 function slotBanner() {
   if (!state.user || isAdmin() && !state.enrollments.length) return '';
@@ -249,7 +260,7 @@ function slotBanner() {
     return `<div class="slot-banner"><div><strong>Votre cours de la semaine</strong><div class="small">Votre professeure vous attribue votre créneau. En attendant, vous pouvez prendre une place libre.</div></div></div>`;
   }
   const e = state.enrollments[0];
-  return `<div class="slot-banner"><div><div class="small muted">Mon cours de la semaine</div><strong>${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} · ${esc(e.title)}</strong>
+  return `<div class="slot-banner"><div><div class="small muted">Votre cours de la semaine</div><strong>${DAYS[e.weekday]} ${e.start_time.replace(/^0/, '').replace(':', 'h').replace(/h00$/, 'h')} · ${esc(e.title)}</strong>
     <div class="small">Un empêchement ? « Je ne viens pas » libère votre place pour les autres.</div></div></div>`;
 }
 
@@ -354,7 +365,7 @@ async function viewPlanning() {
   const to = addDays(from, 6);
   $view.innerHTML = `
     ${!state.user ? `<div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p>
-      <p class="muted">Consultez le planning et <a href="#/inscription">créez votre compte</a> pour choisir votre créneau.</p></div>` : slotBanner()}
+      <p class="muted">Consultez le planning et <a href="#/inscription">créez votre compte</a> pour choisir votre créneau.</p></div>` : greetingHtml(data.sessions) + slotBanner()}
     <div class="week-head">
       <button class="icon-btn" id="prev" aria-label="Semaine précédente"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
       <h1>${fmt(from, { day: 'numeric', month: 'short' })} – ${fmt(to, { day: 'numeric', month: 'short', year: 'numeric' })}</h1>
@@ -538,7 +549,7 @@ function viewProfile() {
         <div class="field"><label for="name">Nom</label><input id="name" name="name" value="${esc(u.name)}" required></div>
         <div class="field"><label for="phone">Téléphone</label><input id="phone" name="phone" type="tel" value="${esc(u.phone)}"></div>
       </div>
-      <div class="field"><label class="check"><input type="checkbox" name="notify_email" ${u.notify_email !== false ? 'checked' : ''}>Recevoir aussi les alertes par e-mail (places libres, créneau à valider)</label></div>
+      <div class="field"><label class="check"><input type="checkbox" name="notify_email" ${u.notify_email !== false ? 'checked' : ''}>Recevoir aussi les alertes par e-mail (places libres, cours déplacés ou ajoutés)</label></div>
       <h3>Changer de mot de passe</h3>
       <div class="grid2">
         <div class="field"><label for="cp">Mot de passe actuel</label><input id="cp" name="current_password" type="password" autocomplete="current-password"></div>

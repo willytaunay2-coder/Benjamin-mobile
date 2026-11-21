@@ -94,7 +94,8 @@ function createApp(db, opts = {}) {
   const DAY_NAMES = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
   const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
   const longDate = (d) => { const x = D.parseISO(d); return `${DAY_NAMES[x.getDay()]} ${x.getDate()} ${MONTHS[x.getMonth()]}`; };
-  const hhmm = (t) => t.replace(':', 'h').replace(/h00$/, 'h');
+  const firstName = (n) => String(n).trim().split(/\s+/)[0];
+  const hhmm = (t) => t.replace(/^0(\d)/, '$1').replace(':', 'h').replace(/h00$/, 'h');
 
   // userIds : destinataires ; email : envoyer aussi un e-mail (si la personne l'accepte)
   function notify(userIds, { kind, title, body = '', link = '' }, email = true) {
@@ -109,7 +110,7 @@ function createApp(db, opts = {}) {
       mails.push({
         to: u.email,
         subject: `${studio} — ${title}`,
-        text: `Bonjour ${u.name},\n\n${body}\n\n${appUrl ? `${appUrl}/${link}\n\n` : ''}À bientôt sur le tapis,\n${studio}\n\n(Vous pouvez désactiver ces e-mails dans votre profil.)`,
+        text: `Bonjour ${firstName(u.name)},\n\n${body}\n\n${appUrl ? `${appUrl}/${link}\n\n` : ''}À bientôt sur le tapis,\n${studio}\n\n(Vous pouvez désactiver ces e-mails dans votre profil.)`,
       });
     }
     mailer.sendLater(mails);
@@ -957,7 +958,7 @@ function createApp(db, opts = {}) {
     mailer.sendLater([{
       to: u.email,
       subject: `${studio} — votre compte est prêt`,
-      text: `Bonjour ${u.name},\n\nVotre compte ${studio} est créé.${slotText ? `\nVotre cours de la semaine : ${slotText}.` : ''}\n\nPour vous connecter${appUrl ? ` : ${appUrl}/` : ''}\nE-mail : ${u.email}\nMot de passe provisoire : ${pw}\n\nVous pourrez le changer dans votre profil. Si vous ne pouvez pas venir à un cours, libérez votre place dans l'application : les autres élèves seront prévenu·es.\n\nÀ bientôt sur le tapis,\n${studio}`,
+      text: `Bonjour ${firstName(u.name)},\n\nVotre compte ${studio} est créé.${slotText ? `\nVotre cours de la semaine : ${slotText}.` : ''}\n\nPour vous connecter${appUrl ? ` : ${appUrl}/` : ''}\nE-mail : ${u.email}\nMot de passe provisoire : ${pw}\n\nVous pourrez le changer dans votre profil. Si vous ne pouvez pas venir à un cours, libérez votre place dans l'application : les autres élèves seront prévenu·es.\n\nÀ bientôt sur le tapis,\n${studio}`,
     }]);
   }
   const slotLabel = (t) => `${DAY_NAMES[t.weekday]} ${hhmm(t.start_time)}`;
