@@ -163,7 +163,7 @@
   }
 
   // ---------- Sauvegarde dans le navigateur ----------
-  const KEY = 'nada-atma-demo-v4';
+  const KEY = 'nada-atma-demo-v5';
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
   function save() {
@@ -201,14 +201,14 @@
     const T = {};
     for (const [k, wd, h] of [['ma12', 2, '12:15'], ['ma19', 2, '19:00'], ['ma20', 2, '20:15'], ['je12', 4, '12:15'], ['je18', 4, '18:30'], ['je19', 4, '19:45'], ['ve9', 5, '09:00']]) {
       T[k] = (await api('POST', '/api/admin/templates', { title: 'Cours de yoga', description: 'Un doux mélange de Yin yoga, Yoga thérapie, Hatha yoga et Yoga du son, saupoudré de sonothérapie.',
-        weekday: wd, start_time: h, duration_min: 60, capacity: 12, location: 'L’espace des possibles, Miribel', start_date: start, end_date: end })).template;
+        weekday: wd, start_time: h, duration_min: 60, capacity: 10, location: 'L’espace des possibles, Miribel', start_date: start, end_date: end })).template;
     }
     const people = {
-      ma19: ['Claire Dupont', 'Marie Bernard', 'Sophie Laurent', 'Thomas Roux', 'Anne Fontaine', 'Julie Morel', 'Paul Garnier', 'Léa Petit', 'Camille Faure', 'Hugo Martin', 'Emma Girard'],
+      ma19: ['Claire Dupont', 'Marie Bernard', 'Sophie Laurent', 'Thomas Roux', 'Anne Fontaine', 'Julie Morel', 'Paul Garnier', 'Léa Petit', 'Camille Faure'],
       ma12: ['Nina Blanc', 'Lucas Henry', 'Inès Moreau', 'Jules Lambert', 'Chloé Simon', 'Louis Michel'],
       ma20: ['Manon Lefèvre', 'Adam Rousseau', 'Zoé Vincent', 'Gabriel Muller', 'Alice Fournier', 'Arthur Bonnet', 'Rose Dupuis', 'Victor Lemoine'],
       je12: ['Lina Mercier', 'Tom Guerin'],
-      je18: ['Jade Boyer', 'Noé Garcia', 'Eva Chevalier', 'Sacha Robin', 'Mila Clément', 'Ethan Morin', 'Lou Nicolas', 'Clara Perrin', 'Maël Roche', 'Anna Gauthier', 'Liam Dumas', 'Sarah Brun'],
+      je18: ['Jade Boyer', 'Noé Garcia', 'Eva Chevalier', 'Sacha Robin', 'Mila Clément', 'Ethan Morin', 'Lou Nicolas', 'Clara Perrin', 'Maël Roche', 'Anna Gauthier'],
       je19: ['Enzo Blanchard', 'Lola Giraud', 'Timéo Joly', 'Margot Rivière', 'Robin Colin'],
       ve9: ['Agathe Lemaire', 'Simone Carré', 'Bernard Picard'],
     };

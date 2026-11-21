@@ -1,6 +1,6 @@
 'use strict';
 // Crée les créneaux hebdomadaires de Nada Atma et génère les séances de la saison.
-// Usage : npm run creneaux -- [places=12] [fin=2027-06-30]
+// Usage : npm run creneaux -- [places=10] [fin=2027-06-30]
 process.env.TZ = process.env.STUDIO_TZ || 'Europe/Paris';
 const path = require('node:path');
 const { openDb } = require('../lib/db');
@@ -8,7 +8,7 @@ const { createApp } = require('../lib/app');
 const D = require('../lib/dates');
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=')));
-const capacity = Number(args.places || 12);
+const capacity = Number(args.places || 10);
 const end = args.fin || '2027-06-30';
 const start = args.debut || D.toISO(new Date());
 const db = openDb(process.env.DB_FILE || path.join(__dirname, '..', 'data', 'nada-atma.db'));

@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
   expires_at INTEGER NOT NULL
 );
 
--- Cours récurrents (ex : "Hatha yoga, mardi 18h30, 12 places")
+-- Cours récurrents (ex : "Hatha yoga, mardi 19h, 10 places")
 CREATE TABLE IF NOT EXISTS templates (
   id           INTEGER PRIMARY KEY,
   title        TEXT NOT NULL,

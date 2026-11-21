@@ -55,7 +55,7 @@ npm start          # → http://localhost:3000
 npm test           # tests automatiques de l'API
 ```
 
-**Créneaux Nada Atma** : `npm run creneaux -- places=12` crée les 7 créneaux de la saison
+**Créneaux Nada Atma** : `npm run creneaux` (10 places par cours ; `-- places=12` pour changer) crée les 7 créneaux de la saison
 (mardi 12h15, 19h, 20h15 · jeudi 12h15, 18h30, 19h45 · vendredi 9h, durée 1 h, à L'espace des possibles)
 et toutes les séances jusqu'au 30 juin (`fin=AAAA-MM-JJ` pour changer). Les durées et le nombre de places se
 modifient ensuite dans Gestion › Cours réguliers.

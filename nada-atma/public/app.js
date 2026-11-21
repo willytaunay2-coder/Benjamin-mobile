@@ -819,7 +819,7 @@ async function sessionDetailModal(id, after) {
 }
 
 function editSessionModal(s, after, defaultDate) {
-  const v = s || { title: '', description: '', date: defaultDate && defaultDate > today() ? defaultDate : today(), start_time: '18:30', duration_min: 75, capacity: 12, location: '', color: '#8e3b6b' };
+  const v = s || { title: '', description: '', date: defaultDate && defaultDate > today() ? defaultDate : today(), start_time: '18:30', duration_min: 60, capacity: 10, location: 'L’espace des possibles, Miribel', color: '#8e3b6b' };
   modal(`
     <div class="modal-head"><h2>${s ? 'Modifier ou déplacer' : 'Ajouter une séance'}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     ${!s ? '<p class="small muted">Séance supplémentaire, atelier, stage… Elle est ouverte à la réservation de tous les élèves. Pour un cours qui revient chaque semaine, utilisez « Cours réguliers ».</p>' : ''}
@@ -1218,7 +1218,7 @@ async function enrollmentsModal(t, after) {
 
 function templateModal(t, after) {
   const d = seasonDefaults();
-  const v = t || { title: '', description: '', weekday: 2, start_time: '18:30', duration_min: 75, capacity: 12, location: '', color: '#8e3b6b', start_date: d.start, end_date: d.end, active: 1 };
+  const v = t || { title: 'Cours de yoga', description: '', weekday: 2, start_time: '18:30', duration_min: 60, capacity: 10, location: 'L’espace des possibles, Miribel', color: '#8e3b6b', start_date: d.start, end_date: d.end, active: 1 };
   modal(`
     <div class="modal-head"><h2>${t ? 'Modifier le cours' : 'Nouveau cours régulier'}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <form id="f">
