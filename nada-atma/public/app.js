@@ -826,7 +826,7 @@ async function viewAdminYear() {
       <h1>Saison ${startYear}–${startYear + 1}</h1>
       <button class="icon-btn" id="next" aria-label="Année suivante"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
     </div>
-    <p class="muted small">${plural(active.length, 'séance')} programmée${active.length > 1 ? 's' : ''} · ${plural(active.reduce((a, s) => a + s.occupied, 0), 'place occupée')} · ${plural(data.closures.length, 'période')} de fermeture</p>
+    <p class="muted small">${plural(active.length, 'séance')} programmée${active.length > 1 ? 's' : ''} · ${plural(active.reduce((a, s) => a + s.occupied, 0), 'inscription')} · ${plural(data.closures.length, 'période')} de fermeture</p>
     <div class="legend"><span class="l-has">Cours</span><span class="l-full">Complet</span><span class="l-closed">Vacances / fermeture</span></div>
     <div class="year-grid">${months}</div>`;
   $view.querySelector('#prev').onclick = () => { location.hash = `#/admin/annee?annee=${startYear - 1}`; };
