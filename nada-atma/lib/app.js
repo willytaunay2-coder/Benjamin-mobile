@@ -238,7 +238,7 @@ function createApp(db, opts = {}) {
         kind: 'enrollment',
         title: `Votre créneau : ${slot}`,
         body: `Vous êtes inscrit·e sur le créneau « ${t.title} » du ${slot}, à partir du ${longDate(start)}. Merci de valider votre inscription dans l'application.`,
-        link: '#/mes-reservations',
+        link: '#/planning',
       });
     }
     return { enrollment_id: Number(r.lastInsertRowid), start_date: start, status };
@@ -670,21 +670,21 @@ function createApp(db, opts = {}) {
   route('POST', '/api/admin/templates/:id/enrollments', async ({ params, body }) => {
     const t = q('SELECT * FROM templates WHERE id = ?').get(params.id) || fail(404, 'Cours introuvable');
     const u = q('SELECT * FROM users WHERE id = ?').get(int(body.user_id, 1, 1e12, 'Membre')) || fail(404, 'Membre introuvable');
-    return tx(db, () => enroll(t, u.id, body.confirmed ? 'confirmed' : 'pending'));
+    return tx(db, () => enroll(t, u.id, body.pending ? 'pending' : 'confirmed'));
   }, 'admin');
 
   // Fin d'inscription à l'année (l'historique est conservé)
+  function endEnrollment(e) {
+    const today = D.toISO(now());
+    const end = e.start_date > D.addDays(today, -1) ? null : D.addDays(today, -1);
+    if (end) q('UPDATE enrollments SET end_date = ? WHERE id = ?').run(end, e.id);
+    else q('DELETE FROM enrollments WHERE id = ?').run(e.id); // jamais commencée
+    q(`DELETE FROM absences WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE template_id = ? AND date >= ?)`)
+      .run(e.user_id, e.template_id, today);
+  }
   route('DELETE', '/api/admin/enrollments/:id', async ({ params }) => {
     const e = q('SELECT * FROM enrollments WHERE id = ? AND end_date IS NULL').get(params.id) || fail(404, 'Inscription introuvable');
-    return tx(db, () => {
-      const today = D.toISO(now());
-      const end = e.start_date > D.addDays(today, -1) ? null : D.addDays(today, -1);
-      if (end) q('UPDATE enrollments SET end_date = ? WHERE id = ?').run(end, e.id);
-      else q('DELETE FROM enrollments WHERE id = ?').run(e.id); // jamais commencée
-      q(`DELETE FROM absences WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE template_id = ? AND date >= ?)`)
-        .run(e.user_id, e.template_id, today);
-      return { ok: true };
-    });
+    return tx(db, () => { endEnrollment(e); return { ok: true }; });
   }, 'admin');
 
   // L'admin note une absence (avec crédit) ou l'annule
@@ -897,7 +897,7 @@ function createApp(db, opts = {}) {
     if (body.notify !== false) {
       if (f.cancelled && !s.cancelled) {
         announce(beforeAll, 'cancel', `Séance annulée ${oldWhen}`,
-          `La séance « ${s.title} » du ${oldWhen} est annulée${reason ? ` : ${reason}` : ''}.`, '#/mes-reservations');
+          `La séance « ${s.title} » du ${oldWhen} est annulée${reason ? ` : ${reason}` : ''}.`, '#/planning');
         notified = beforeAll.length;
       } else if (!f.cancelled && s.cancelled) {
         announce(beforeAll, 'restore', `Séance rétablie ${newWhen}`, `Bonne nouvelle : la séance « ${f.title} » du ${newWhen} est maintenue.`, weekLink(f.date));
@@ -940,9 +940,70 @@ function createApp(db, opts = {}) {
               FROM users u ORDER BY u.name COLLATE NOCASE`).all(D.toISO(now()))
       .map((u) => ({
         ...publicUser(u), upcoming: u.upcoming, credits: creditsFor(u.id),
+        slot_ids: enrollmentsOf(u.id).map((e) => e.template_id),
         slots: enrollmentsOf(u.id).map((e) => `${['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'][e.weekday]} ${e.start_time.replace(':', 'h')} ${e.title}`),
       })),
   }), 'admin');
+
+  // Mot de passe provisoire lisible (sans caractères ambigus)
+  const tempPassword = () => {
+    const A = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const b = crypto.randomBytes(10);
+    let p = ''; for (let i = 0; i < 10; i++) p += A[b[i] % A.length];
+    return `${p.slice(0, 5)}-${p.slice(5)}`;
+  };
+  function welcomeMail(u, pw, slotText) {
+    const studio = settings().studio_name || 'Nada Atma';
+    mailer.sendLater([{
+      to: u.email,
+      subject: `${studio} — votre compte est prêt`,
+      text: `Bonjour ${u.name},\n\nVotre compte ${studio} est créé.${slotText ? `\nVotre cours de la semaine : ${slotText}.` : ''}\n\nPour vous connecter${appUrl ? ` : ${appUrl}/` : ''}\nE-mail : ${u.email}\nMot de passe provisoire : ${pw}\n\nVous pourrez le changer dans votre profil. Si vous ne pouvez pas venir à un cours, libérez votre place dans l'application : les autres élèves seront prévenu·es.\n\nÀ bientôt sur le tapis,\n${studio}`,
+    }]);
+  }
+  const slotLabel = (t) => `${DAY_NAMES[t.weekday]} ${hhmm(t.start_time)}`;
+
+  // La professeure crée un compte élève, avec son créneau à l'année
+  route('POST', '/api/admin/users', async ({ body }) => {
+    const name = str(body.name, 100), email = str(body.email, 200).toLowerCase(), phone = str(body.phone, 30);
+    if (!name) fail(400, 'Le nom est obligatoire');
+    if (!isEmail(email)) fail(400, 'Adresse e-mail invalide');
+    if (q('SELECT 1 FROM users WHERE email = ?').get(email)) fail(409, 'Un compte existe déjà avec cette adresse');
+    const t = body.template_id ? (q('SELECT * FROM templates WHERE id = ? AND active = 1').get(body.template_id) || fail(404, 'Créneau introuvable')) : null;
+    const pw = tempPassword();
+    const out = tx(db, () => {
+      const r = q("INSERT INTO users(email, name, phone, password_hash, role) VALUES (?,?,?,?,'member')").run(email, name, phone, hashPassword(pw));
+      const id = Number(r.lastInsertRowid);
+      const en = t ? enroll(t, id, 'confirmed') : null;
+      return { id, en };
+    });
+    const u = q('SELECT * FROM users WHERE id = ?').get(out.id);
+    if (body.send_email !== false) welcomeMail(u, pw, t ? `${slotLabel(t)}, à partir du ${longDate(out.en.start_date)}` : '');
+    return { user: publicUser(u), temp_password: pw, start_date: out.en?.start_date || null };
+  }, 'admin');
+
+  // Changer le créneau à l'année d'un·e élève (ou le retirer avec template_id null)
+  route('PUT', '/api/admin/users/:id/slot', async ({ params, body }) => {
+    const u = q('SELECT * FROM users WHERE id = ?').get(params.id) || fail(404, 'Membre introuvable');
+    const t = body.template_id ? (q('SELECT * FROM templates WHERE id = ? AND active = 1').get(body.template_id) || fail(404, 'Créneau introuvable')) : null;
+    return tx(db, () => {
+      const cur = q('SELECT * FROM enrollments WHERE user_id = ? AND end_date IS NULL').all(u.id);
+      if (t && cur.length === 1 && cur[0].template_id === t.id) return { ok: true, unchanged: true };
+      cur.forEach(endEnrollment);
+      const en = t ? enroll(t, u.id, 'confirmed') : null;
+      if (t) notify([u.id], { kind: 'enrollment', title: `Votre cours de la semaine : ${slotLabel(t)}`, body: `Vous êtes inscrit·e le ${slotLabel(t)} à partir du ${longDate(en.start_date)}.`, link: '#/planning' });
+      return { ok: true, start_date: en?.start_date || null };
+    });
+  }, 'admin');
+
+  // Nouveau mot de passe provisoire (élève qui a oublié le sien)
+  route('POST', '/api/admin/users/:id/password', async ({ params, body }) => {
+    const u = q('SELECT * FROM users WHERE id = ?').get(params.id) || fail(404, 'Membre introuvable');
+    const pw = tempPassword();
+    q('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(pw), u.id);
+    q('DELETE FROM auth_tokens WHERE user_id = ?').run(u.id);
+    if (body.send_email !== false) welcomeMail(u, pw, '');
+    return { temp_password: pw };
+  }, 'admin');
 
   // Ajuster les crédits de rattrapage d'un membre (+1 / −1, carnet offert…)
   route('POST', '/api/admin/users/:id/credits', async ({ params, body }) => {

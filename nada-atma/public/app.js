@@ -102,7 +102,6 @@ const ICON = {
 function navItems() {
   const items = [{ href: '#/planning', label: 'Planning', icon: ICON.cal }];
   if (state.user) {
-    items.push({ href: '#/mes-reservations', label: 'Mes séances', icon: ICON.mine });
     if (isAdmin()) items.push({ href: '#/admin', label: 'Gestion', icon: ICON.admin });
     items.push({ href: '#/profil', label: 'Profil', icon: ICON.user });
   } else {
@@ -143,8 +142,8 @@ const ROUTES = {
   '#/planning': viewPlanning,
   '#/connexion': viewLogin,
   '#/inscription': viewRegister,
-  '#/mes-reservations': viewMyBookings,
-  '#/mon-creneau': viewChooseSlot,
+  '#/mes-reservations': viewPlanning, // anciens liens
+  '#/mon-creneau': viewPlanning,
   '#/alertes': viewAlerts,
   '#/profil': viewProfile,
   '#/admin': viewAdminSessions,
@@ -247,7 +246,7 @@ function slotBanner() {
   if (!state.user || isAdmin() && !state.enrollments.length) return '';
   if (state.enrollments.some((e) => e.status === 'pending')) return pendingHtml();
   if (!state.enrollments.length) {
-    return `<div class="slot-banner"><div><strong>Votre créneau de l'année</strong><div class="small">Indiquez vos préférences : votre professeure vous inscrira selon les places.</div></div><a class="btn small" href="#/mon-creneau">Mes préférences</a></div>`;
+    return `<div class="slot-banner"><div><strong>Votre cours de la semaine</strong><div class="small">Votre professeure vous attribue votre créneau. En attendant, vous pouvez prendre une place libre.</div></div></div>`;
   }
   const e = state.enrollments[0];
   return `<div class="slot-banner"><div><div class="small muted">Mon cours de la semaine</div><strong>${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} · ${esc(e.title)}</strong>
@@ -524,7 +523,7 @@ function viewRegister() {
       state.user = r.user;
       await refreshMe();
       toast(r.user.role === 'admin' ? 'Compte administrateur créé' : 'Bienvenue chez Nada Atma');
-      location.hash = r.user.role === 'admin' ? '#/admin/cours' : '#/planning';
+      location.hash = r.user.role === 'admin' ? '#/admin' : '#/planning';
     } catch (err) { f.querySelector('#err').textContent = err.message; }
   };
 }
@@ -571,8 +570,7 @@ function viewProfile() {
 // ---------- Administration ----------
 function adminNav(active) {
   const tabs = [
-    ['#/admin', 'Semaine'], ['#/admin/annee', 'Année'], ['#/admin/cours', 'Cours réguliers'],
-    ['#/admin/repartition', 'Répartition'], ['#/admin/fermetures', 'Vacances'], ['#/admin/appel', 'Appel'], ['#/admin/membres', 'Membres'], ['#/admin/reglages', 'Réglages'],
+    ['#/admin', 'Semaine'], ['#/admin/cours', 'Cours'], ['#/admin/membres', 'Élèves'], ['#/admin/fermetures', 'Vacances'],
   ];
   return `<div class="subnav">${tabs.map(([h, l]) => `<a href="${h}" class="chip ${h === active ? 'active' : ''}">${l}</a>`).join('')}</div>`;
 }
@@ -793,7 +791,7 @@ async function viewAttendance() {
     </section>`;
   };
   $view.innerHTML = `
-    <div class="no-print">${adminNav('#/admin/appel')}</div>
+    <div class="no-print">${adminNav('#/admin')}</div>
     <div class="week-head no-print">
       <button class="icon-btn" id="prev" aria-label="Jour précédent">${'<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>'}</button>
       <h1 style="text-transform:capitalize">${fmtFull(date)}</h1>
@@ -877,7 +875,7 @@ async function viewAdminTemplates() {
   const { templates } = await api('/api/admin/templates');
   $view.innerHTML = `
     ${adminNav('#/admin/cours')}
-    <div class="section-title"><h1 style="margin:0">Cours réguliers</h1><button class="btn" id="add">+ Nouveau cours</button></div>
+    <div class="section-title"><h1 style="margin:0">Cours de la semaine</h1><button class="btn" id="add">+ Nouveau cours</button></div>
     <p class="muted small">Un cours régulier crée automatiquement une séance chaque semaine sur la période choisie, en sautant les vacances et jours fériés.</p>
     ${templates.length ? `<div class="card">${templates.map((t) => `
       <div class="list-item">
@@ -1090,52 +1088,114 @@ async function viewAdminClosures() {
   };
 }
 
+const CLOSE_X = '<button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>';
+
+// Liste déroulante des créneaux, avec les places restantes à l'année
+function slotOptions(templates, current) {
+  const opts = templates.filter((t) => t.active).map((t) => {
+    const left = t.capacity - t.enrolled + (t.id === current ? 1 : 0);
+    const full = left <= 0;
+    return `<option value="${t.id}" ${t.id === current ? 'selected' : ''} ${full ? 'disabled' : ''}>${DAYS[t.weekday]} ${t.start_time.replace(/^0/, '').replace(':', 'h').replace(/h00$/, 'h')} — ${full ? 'complet' : plural(left, 'place')}</option>`;
+  });
+  return `<option value="">Pas de créneau pour l’instant</option>${opts.join('')}`;
+}
+
+function passwordModal(name, email, pw, sent) {
+  modal(`
+    <div class="modal-head"><h2>Compte prêt</h2>${CLOSE_X}</div>
+    <p>Identifiants de <strong>${esc(name)}</strong> :</p>
+    <div class="cred"><div><span class="small muted">E-mail</span><strong>${esc(email)}</strong></div>
+      <div><span class="small muted">Mot de passe provisoire</span><strong class="pw">${esc(pw)}</strong></div></div>
+    <p class="small muted">${sent ? 'Ces identifiants viennent d’être envoyés par e-mail.' : 'Transmettez-les à l’élève.'} Le mot de passe pourra être changé dans son profil.</p>
+    <div class="btn-row" style="justify-content:flex-end">
+      <button class="btn secondary" id="copy">Copier</button><button class="btn" data-close>Terminé</button></div>`, (m) => {
+    m.querySelector('#copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(`Nada Atma\nE-mail : ${email}\nMot de passe : ${pw}\n${location.origin}`); toast('Copié'); }
+      catch { toast('Copie impossible : notez le mot de passe', true); }
+    };
+  });
+}
+
+function newStudentModal(templates) {
+  modal(`
+    <div class="modal-head"><h2>Nouvel élève</h2>${CLOSE_X}</div>
+    <form id="f">
+      <div class="field"><label for="n-name">Prénom et nom</label><input id="n-name" name="name" required autocomplete="off"></div>
+      <div class="field"><label for="n-email">E-mail</label><input id="n-email" name="email" type="email" required autocomplete="off"></div>
+      <div class="field"><label for="n-phone">Téléphone</label><input id="n-phone" name="phone" type="tel" autocomplete="off"></div>
+      <div class="field"><label for="n-slot">Cours de la semaine (à l’année)</label><select id="n-slot" name="template_id">${slotOptions(templates, null)}</select></div>
+      <label class="check"><input type="checkbox" name="send_email" checked> Envoyer les identifiants par e-mail</label>
+      <div class="btn-row" style="justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn ghost" data-close>Annuler</button><button class="btn">Créer le compte</button></div>
+    </form>`, (m, close) => {
+    m.querySelector('#f').onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const body = { name: f.get('name'), email: f.get('email'), phone: f.get('phone'), template_id: Number(f.get('template_id')) || null, send_email: !!f.get('send_email') };
+      try {
+        const r = await api('/api/admin/users', { method: 'POST', body });
+        close();
+        await viewAdminUsers();
+        passwordModal(r.user.name, r.user.email, r.temp_password, body.send_email);
+      } catch (err) { toast(err.message, true); }
+    };
+  });
+}
+
 async function viewAdminUsers() {
   loading();
-  const { users } = await api('/api/admin/users');
+  const [{ users }, { templates }] = await Promise.all([api('/api/admin/users'), api('/api/admin/templates')]);
   const render = (term = '') => {
     const t = term.toLowerCase();
     const list = users.filter((u) => !t || u.name.toLowerCase().includes(t) || u.email.toLowerCase().includes(t));
     return list.map((u) => `
-      <div class="list-item">
-        <div class="grow"><strong>${esc(u.name)}</strong> ${u.role === 'admin' ? '<span class="badge plum">Admin</span>' : ''} ${u.active ? '' : '<span class="badge danger">Désactivé</span>'}
-          <div class="small muted">${esc(u.email)}${u.phone ? ` · <a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''} </div>
-          <div class="small">${u.slots.length ? u.slots.map(esc).join(' · ') : '<span class="muted">Pas de créneau à l’année</span>'}</div></div>
-        <button class="btn secondary small" data-user="${u.id}">Détails</button>
-      </div>`).join('') || '<p class="muted">Aucun résultat.</p>';
+      <button class="list-item member-row" data-user="${u.id}">
+        <span class="avatar">${esc(u.name.split(/\s+/).map((w) => w[0] || '').join('').slice(0, 2).toUpperCase())}</span>
+        <span class="grow"><strong>${esc(u.name)}</strong> ${u.role === 'admin' ? '<span class="badge plum">Prof</span>' : ''} ${u.active ? '' : '<span class="badge danger">Désactivé</span>'}
+          <span class="small ${u.slots.length ? '' : 'muted'}" style="display:block">${u.slots.length ? u.slots.map(esc).join(' · ') : 'Pas de créneau'}</span></span>
+        <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>`).join('') || '<p class="muted">Aucun résultat.</p>';
   };
   $view.innerHTML = `
     ${adminNav('#/admin/membres')}
-    <h1>Membres <span class="badge">${users.length}</span></h1>
-    <input class="search" id="q" type="search" placeholder="Rechercher un nom ou un e-mail…">
+    <div class="section-title"><h1 style="margin:0">Élèves <span class="badge">${users.filter((u) => u.role !== 'admin').length}</span></h1><button class="btn" id="new">+ Nouvel élève</button></div>
+    <input class="search" id="q" type="search" placeholder="Rechercher un nom ou un e-mail…" aria-label="Rechercher">
     <div class="card" id="list">${render()}</div>
-    ${users.length ? `<p class="small"><a href="mailto:?bcc=${encodeURIComponent(users.filter((u) => u.active).map((u) => u.email).join(','))}" class="mail"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></svg>Écrire à tous les membres</a></p>` : ''}`;
+    ${users.length ? `<p class="small"><a href="mailto:?bcc=${encodeURIComponent(users.filter((u) => u.active).map((u) => u.email).join(','))}" class="mail"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></svg>Écrire à tous les élèves</a></p>` : ''}`;
   $view.querySelector('#q').oninput = (e) => { $view.querySelector('#list').innerHTML = render(e.target.value); };
-  $view.onclick = async (e) => {
+  $view.querySelector('#new').onclick = () => newStudentModal(templates);
+  $view.onclick = (e) => {
     const b = e.target.closest('[data-user]');
     if (!b) return;
     const u = users.find((x) => String(x.id) === b.dataset.user);
-    const { bookings } = await api(`/api/admin/users/${u.id}/bookings`);
-    const up = bookings.filter((x) => x.date >= today()).reverse();
-    const past = bookings.filter((x) => x.date < today());
+    const cur = templates.find((t) => u.slot_ids.includes(t.id));
     modal(`
-      <div class="modal-head"><h2>${esc(u.name)}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-      <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''}<br><span class="muted">Inscrit·e le ${new Date(u.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}</span></p>
-      <h3>Créneau à l'année</h3>
-      <p class="small">${u.slots.length ? u.slots.map(esc).join('<br>') : '<span class="muted">Aucun (Gestion › Répartition ou Cours réguliers)</span>'}</p>
-      <h3>Places libres réservées (${up.length})</h3>
-      ${up.length ? up.map((x) => `<div class="small">${x.cancelled ? '×' : '·'} ${fmtLong(x.date)} ${x.start_time.replace(':', 'h')} — ${esc(x.title)}</div>`).join('') : '<p class="small muted">Aucune.</p>'}
-      <h3 style="margin-top:12px">Séances passées</h3><p class="small">${past.filter((x) => !x.cancelled).length} séance(s) suivie(s)</p>
-      ${u.id !== state.user.id ? `<div class="btn-row" style="margin-top:16px">
-        <button class="btn secondary small" id="role">${u.role === 'admin' ? 'Retirer les droits admin' : 'Rendre administrateur'}</button>
-        <button class="btn ${u.active ? 'danger' : 'ok'} small" id="act">${u.active ? 'Désactiver le compte' : 'Réactiver le compte'}</button>
-      </div>` : ''}`, (m, close) => {
-      const upd = async (body) => {
-        try { await api(`/api/admin/users/${u.id}`, { method: 'PUT', body }); close(); toast('Membre mis à jour'); viewAdminUsers(); }
+      <div class="modal-head"><h2>${esc(u.name)}</h2>${CLOSE_X}</div>
+      <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''}</p>
+      <div class="field"><label for="slot">Cours de la semaine (à l’année)</label><select id="slot">${slotOptions(templates, cur?.id || null)}</select></div>
+      <div class="btn-row"><button class="btn" id="save">Enregistrer le créneau</button></div>
+      <h3 style="margin-top:20px">Compte</h3>
+      <div class="btn-row">
+        <button class="btn secondary small" id="pw">Nouveau mot de passe</button>
+        ${u.id !== state.user.id ? `<button class="btn ${u.active ? 'danger' : 'ok'} small" id="act">${u.active ? 'Désactiver' : 'Réactiver'}</button>` : ''}
+      </div>`, (m, close) => {
+      m.querySelector('#save').onclick = async () => {
+        const id = Number(m.querySelector('#slot').value) || null;
+        try {
+          await api(`/api/admin/users/${u.id}/slot`, { method: 'PUT', body: { template_id: id } });
+          close(); toast(id ? 'Créneau enregistré, l’élève est prévenu·e' : 'Créneau retiré'); viewAdminUsers();
+        } catch (err) { toast(err.message, true); }
+      };
+      m.querySelector('#pw').onclick = async () => {
+        if (!(await confirmBox(`Créer un nouveau mot de passe pour ${esc(u.name)} ? Il lui sera envoyé par e-mail.`, 'Créer'))) return;
+        try { const r = await api(`/api/admin/users/${u.id}/password`, { method: 'POST', body: {} }); passwordModal(u.name, u.email, r.temp_password, true); }
         catch (err) { toast(err.message, true); }
       };
-      const r = m.querySelector('#role'); if (r) r.onclick = () => upd({ role: u.role === 'admin' ? 'member' : 'admin' });
-      const a = m.querySelector('#act'); if (a) a.onclick = () => upd({ active: !u.active });
+      const a = m.querySelector('#act');
+      if (a) a.onclick = async () => {
+        try { await api(`/api/admin/users/${u.id}`, { method: 'PUT', body: { active: !u.active } }); close(); toast('Compte mis à jour'); viewAdminUsers(); }
+        catch (err) { toast(err.message, true); }
+      };
     });
   };
 }

@@ -235,10 +235,10 @@ test('inscription d\'office à valider + alerte « place libre » à tous les é
   const jeu = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 4, start_time: '12:15', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
 
   // Inscription d'office : en attente de validation, l'élève est prévenu
-  let r = await admin('POST', `/api/admin/templates/${mar.id}/enrollments`, { user_id: ids.Alice });
+  let r = await admin('POST', `/api/admin/templates/${mar.id}/enrollments`, { user_id: ids.Alice, pending: true });
   assert.equal(r.data.status, 'pending');
-  await admin('POST', `/api/admin/templates/${mar.id}/enrollments`, { user_id: ids.Bob });
-  await admin('POST', `/api/admin/templates/${jeu.id}/enrollments`, { user_id: ids.Carol });
+  await admin('POST', `/api/admin/templates/${mar.id}/enrollments`, { user_id: ids.Bob, pending: true });
+  await admin('POST', `/api/admin/templates/${jeu.id}/enrollments`, { user_id: ids.Carol, pending: true });
   let me = (await alice('GET', '/api/me')).data;
   assert.equal(me.enrollments[0].status, 'pending');
   assert.equal(me.unread, 1);
@@ -311,4 +311,43 @@ test('déplacer / ajouter une séance prévient tout le monde ; feuille d\'appel
   assert.equal(day.sessions.length, 1);
   assert.deepEqual(day.sessions[0].attendees.map((a) => a.name), ['Alice']);
   assert.equal((await alice('GET', '/api/admin/day?date=2026-09-09')).status, 403);
+});
+
+test('la professeure crée un compte élève avec son créneau, le change, réinitialise le mot de passe', async (t) => {
+  NOW = new Date(2026, 8, 4, 10, 0);
+  const { server, client, mailer } = await start();
+  t.after(() => server.close());
+  const admin = client(), eve = client();
+  await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
+  const jeu = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 4, start_time: '12:15', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
+
+  let r = await admin('POST', '/api/admin/users', { name: 'Ève', email: 'Eve@example.com', phone: '0601020304', template_id: mar.id });
+  assert.equal(r.status, 200);
+  assert.match(r.data.temp_password, /^[a-z0-9]{5}-[a-z0-9]{5}$/);
+  assert.equal(r.data.start_date, '2026-09-04');
+  const uid = r.data.user.id;
+  await new Promise((res) => setTimeout(res, 20));
+  assert.ok(mailer.sent.some((m) => m.to === 'eve@example.com' && m.text.includes(r.data.temp_password) && /mardi 19h/.test(m.text)));
+  assert.equal((await admin('POST', '/api/admin/users', { name: 'X', email: 'eve@example.com' })).status, 409);
+  assert.equal((await eve('POST', '/api/admin/users', { name: 'X', email: 'x@example.com' })).status, 401);
+
+  // L'élève se connecte : son créneau est déjà validé
+  assert.equal((await eve('POST', '/api/login', { email: 'eve@example.com', password: r.data.temp_password })).status, 200);
+  let me = (await eve('GET', '/api/me')).data;
+  assert.equal(me.enrollments.length, 1);
+  assert.equal(me.enrollments[0].status, 'confirmed');
+
+  // Changement de créneau : mardi → jeudi
+  r = await admin('PUT', `/api/admin/users/${uid}/slot`, { template_id: jeu.id });
+  assert.equal(r.status, 200);
+  me = (await eve('GET', '/api/me')).data;
+  assert.deepEqual(me.enrollments.map((e) => e.weekday), [4]);
+  const thu = (await eve('GET', '/api/sessions?from=2026-09-10&to=2026-09-10')).data.sessions[0];
+  assert.equal(thu.my_status, 'enrolled');
+
+  // Nouveau mot de passe : l'ancienne session est fermée
+  r = await admin('POST', `/api/admin/users/${uid}/password`, { send_email: false });
+  assert.equal((await eve('GET', '/api/me')).data.user, null);
+  assert.equal((await eve('POST', '/api/login', { email: 'eve@example.com', password: r.data.temp_password })).status, 200);
 });

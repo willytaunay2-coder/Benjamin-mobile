@@ -13,10 +13,9 @@ Une seule version à maintenir, pas besoin de passer par l'App Store.
 **Un abonnement = un cours par semaine.** Chaque élève est inscrit·e sur un seul créneau pour l'année
 (ex. mardi 19h) : sa place l'attend chaque semaine, hors vacances.
 
-**Répartition selon les préférences.** Les élèves classent leurs créneaux préférés (1er, 2e, 3e choix) dans
-« Mes préférences ». Dans Gestion › Répartition, la professeure lance une **proposition automatique** (par ordre
-d'arrivée des demandes : 1er choix si possible, sinon 2e puis 3e), l'ajuste, puis inscrit. Chaque élève reçoit une
-alerte + un e-mail et **valide** (ou refuse) son créneau ; sa place est gardée en attendant.
+**La professeure crée les comptes.** Dans Gestion › Élèves, « + Nouvel élève » : nom, e-mail, téléphone et
+cours de la semaine, en une fois. Un mot de passe provisoire est créé, envoyé par e-mail (ou à copier) ; l'élève
+le change dans son profil. Le créneau peut être changé à tout moment depuis la fiche de l'élève.
 
 **« Je ne viens pas » → la place est libre, sans rattrapage.** L'élève libère sa place en un clic ; **tous les
 autres élèves sont prévenus** (alerte 🔔 + e-mail) et le premier qui la prend l'a. Le cours n'est pas rattrapé.
@@ -24,21 +23,20 @@ autres élèves sont prévenus** (alerte 🔔 + e-mail) et le premier qui la pre
 
 ## Fonctionnalités
 
-**Pour les élèves**
-- Mes préférences de créneau, validation du créneau attribué
-- Planning semaine par semaine, places libres visibles, « Prendre la place »
-- « Je ne viens pas » / « Je viens finalement », alertes et e-mails
-- « Mes séances » : mon cours de la semaine, prochaines séances, historique
+Deux vues simples.
 
-**Pour la professeure (onglet « Gestion »)**
-- **Répartition** de l'année selon les préférences (proposition automatique + ajustements)
-- **Cours réguliers** : un cours crée toutes les séances de la saison ; liste des inscrit·es à l'année par créneau
-- **Déplacer une séance** (date, heure) ou **ajouter une séance** : tous les élèves sont prévenus (alerte + e-mail) ;
-  les inscrit·es d'une séance annulée ou rétablie aussi
-- **Feuille d'appel** imprimable pour chaque journée (bouton « Appel » sur chaque jour, ou Gestion › Appel)
-- **Vacances & fermetures** (import des vacances scolaires zone A/B/C, jours fériés sautés)
-- **Vue annuelle**, **vue semaine**, détail d'une séance (inscrit·es, places libérées, places prises), noter une absence
-- **Membres** et **Réglages**
+**L'élève** (onglets Planning · Profil)
+- Planning semaine par semaine avec son cours de la semaine
+- « Je ne viens pas » / « Je viens finalement », « Prendre la place » quand une place se libère
+- Alertes 🔔 et e-mails
+
+**La professeure** (onglet « Gestion » : Semaine · Cours · Élèves · Vacances)
+- **Semaine** : remplissage des séances, **déplacer** ou **ajouter** une séance (tous les élèves sont prévenus),
+  détail d'une séance, **feuille d'appel** imprimable par jour
+- **Cours** : les créneaux réguliers, qui créent toutes les séances de la saison
+- **Élèves** : **créer un compte avec son créneau**, changer de créneau, nouveau mot de passe, désactiver
+- **Vacances & fermetures** (vacances scolaires zone A/B/C, jours fériés sautés)
+- Écrans avancés toujours accessibles par adresse : `#/admin/annee`, `#/admin/repartition`, `#/admin/reglages`
 
 ## Démarrage
 
