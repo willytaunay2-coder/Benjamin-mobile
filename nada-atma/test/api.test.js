@@ -1,10 +1,12 @@
 'use strict';
 process.env.TZ = 'Europe/Paris';
+process.env.MAIL_SILENT = '1';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { openDb } = require('../lib/db');
 const { createApp } = require('../lib/app');
+const { createMailer } = require('../lib/mailer');
 const D = require('../lib/dates');
 
 // Horloge figée : vendredi 4 septembre 2026, 10h
@@ -14,7 +16,8 @@ const myBookings = (ss) => ss.filter((s) => s.my_status === 'booked').map((s) =>
 
 async function start() {
   const db = openDb(':memory:');
-  const server = http.createServer(createApp(db, { now: () => NOW }));
+  const mailer = createMailer({ MAIL_SILENT: '1' });
+  const server = http.createServer(createApp(db, { now: () => NOW, mailer }));
   await new Promise((r) => server.listen(0, r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const client = () => {
@@ -30,7 +33,7 @@ async function start() {
       return { status: res.status, data: await res.json() };
     };
   };
-  return { db, server, client };
+  return { db, server, client, mailer };
 }
 
 test('dates : jours fériés et Pâques', () => {
@@ -270,4 +273,54 @@ test('créneau à l\'année : libérer sa place, rattrapage, reprendre sa place'
   assert.equal(enr.length, 2);
   assert.equal((await admin('DELETE', `/api/admin/enrollments/${enr[0].id}`)).status, 200);
   assert.equal((await admin('GET', `/api/admin/templates/${mar.id}/enrollments`)).data.enrollments.length, 1);
+});
+
+test('inscription d\'office à valider + alerte « place libre » à tous les élèves', async (t) => {
+  NOW = new Date(2026, 8, 4, 10, 0);
+  const { server, client, mailer } = await start();
+  t.after(() => server.close());
+  const admin = client(), alice = client(), bob = client(), carol = client();
+  await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  const ids = {};
+  for (const [c, n] of [[alice, 'Alice'], [bob, 'Bob'], [carol, 'Carol']]) ids[n] = (await c('POST', '/api/register', { name: n, email: n.toLowerCase() + '@example.com', password: 'motdepasse1' })).data.user.id;
+  await bob('PUT', '/api/me', { notify_email: false }); // Bob ne veut pas d'e-mails
+  const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
+  const jeu = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 4, start_time: '12:15', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
+
+  // Inscription d'office : en attente de validation, l'élève est prévenu
+  let r = await admin('POST', `/api/admin/templates/${mar.id}/enrollments`, { user_id: ids.Alice });
+  assert.equal(r.data.status, 'pending');
+  await admin('POST', `/api/admin/templates/${mar.id}/enrollments`, { user_id: ids.Bob });
+  await admin('POST', `/api/admin/templates/${jeu.id}/enrollments`, { user_id: ids.Carol });
+  let me = (await alice('GET', '/api/me')).data;
+  assert.equal(me.enrollments[0].status, 'pending');
+  assert.equal(me.unread, 1);
+  assert.ok(mailer.sent.some((m) => m.to === 'alice@example.com' && /mardi 19h/.test(m.subject)));
+  // La place est gardée pendant l'attente : le créneau est complet
+  const tue = (await alice('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0];
+  assert.equal(tue.spots_left, 0);
+
+  // Alice valide ; Carol refuse son créneau
+  assert.equal((await alice('POST', `/api/enrollments/${me.enrollments[0].id}/accept`)).data.enrollments[0].status, 'confirmed');
+  const cEnr = (await carol('GET', '/api/me')).data.enrollments[0];
+  assert.equal((await carol('POST', `/api/enrollments/${cEnr.id}/decline`)).status, 200);
+  assert.equal((await carol('GET', '/api/me')).data.enrollments.length, 0);
+  assert.equal((await alice('POST', `/api/enrollments/${me.enrollments[0].id}/accept`)).status, 409); // déjà validée
+
+  // Alice ne vient pas : Carol (pas sur ce cours) et Bob ? Bob est inscrit au cours -> pas prévenu
+  mailer.sent.length = 0;
+  await alice('POST', `/api/sessions/${tue.id}/release`);
+  await new Promise((res) => setTimeout(res, 20));
+  const carolNotifs = (await carol('GET', '/api/notifications')).data;
+  assert.equal(carolNotifs.notifications[0].kind, 'place');
+  assert.match(carolNotifs.notifications[0].title, /Une place est libre mardi 8 septembre à 19h/);
+  const bobNotifs = (await bob('GET', '/api/notifications')).data.notifications;
+  assert.ok(!bobNotifs.some((n) => n.kind === 'place'));
+  assert.deepEqual(mailer.sent.map((m) => m.to), ['carol@example.com']); // Alice exclue, Bob déjà inscrit
+  const profNotifs = (await admin('GET', '/api/notifications')).data.notifications;
+  assert.ok(profNotifs.some((n) => /Alice libère sa place/.test(n.title)));
+
+  // Marquer comme lu
+  await carol('POST', '/api/notifications/read');
+  assert.equal((await carol('GET', '/api/me')).data.unread, 0);
 });

@@ -10,11 +10,13 @@ Une seule version à maintenir, pas besoin de passer par l'App Store.
 
 ## Fonctionnement
 
-**Un créneau à l'année.** En début de saison, chaque élève s'inscrit sur son créneau (ex. « Hatha yoga, mardi
-18h30 ») : sa place est réservée toutes les semaines, hors vacances.
+**Un créneau à l'année, à valider.** En début de saison, la professeure inscrit d'office chaque élève sur son
+créneau (ex. mardi 19h). L'élève reçoit une alerte et un e-mail, puis **valide** (ou refuse) dans l'application ; sa
+place est gardée en attendant. Sa place est ensuite réservée toutes les semaines, hors vacances.
 
 **« Je ne viens pas » → ma place est disponible.** Si l'élève ne peut pas venir, il libère sa place en un clic :
-elle devient libre pour les autres, et il gagne **un rattrapage** (s'il prévient au moins 12 h avant, délai réglable).
+elle devient libre, **tous les autres élèves sont prévenus** (alerte dans l'application 🔔 + e-mail), et il gagne
+**un rattrapage** (s'il prévient au moins 12 h avant, délai réglable). Le premier qui réserve prend la place.
 
 **Rattrapage sur un créneau libre.** Avec ce rattrapage, il réserve n'importe quelle place libre du planning,
 ou utilise directement « Venir un autre jour » (libération + réservation en une seule fois).
@@ -66,6 +68,13 @@ professeure, puis ajoutez les cours réguliers et les vacances, et partagez le l
 | `DB_FILE`       | `./data/nada-atma.db`  | Fichier de base de données (à sauvegarder régulièrement)    |
 | `STUDIO_TZ`     | `Europe/Paris`         | Fuseau horaire des cours                                    |
 | `COOKIE_SECURE` | —                      | Mettre `1` en production derrière HTTPS                     |
+| `APP_URL`       | —                      | Adresse publique (ex. `https://reservation.nada-atma.com`), pour les liens des e-mails |
+| `MAIL_FROM`     | —                      | Expéditeur, ex. `Nada Atma <reservations@nada-atma.com>`    |
+| `BREVO_API_KEY` | —                      | Clé API Brevo pour envoyer les e-mails (gratuit jusqu'à 300 e-mails/jour) |
+| `RESEND_API_KEY`| —                      | Alternative à Brevo                                         |
+
+Sans clé d'envoi, les alertes restent visibles dans l'application et les e-mails sont seulement affichés dans la
+console du serveur. Chaque élève peut désactiver les e-mails dans son profil.
 
 ## Mise en ligne
 

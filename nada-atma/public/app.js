@@ -1,7 +1,7 @@
 'use strict';
 /* Nada Atma — application de réservation (SPA sans dépendance) */
 
-const state = { user: null, settings: {}, filter: '', credits: 0, enrollments: [] };
+const state = { user: null, settings: {}, filter: '', credits: 0, enrollments: [], unread: 0 };
 const $view = document.getElementById('view');
 
 // ---------- Utilitaires ----------
@@ -111,7 +111,17 @@ function navItems() {
   return items;
 }
 
+function renderBell() {
+  const bell = document.getElementById('bell');
+  bell.classList.toggle('hidden', !state.user);
+  const n = document.getElementById('bell-n');
+  n.textContent = state.unread > 9 ? '9+' : String(state.unread);
+  n.classList.toggle('hidden', !state.unread);
+  bell.setAttribute('aria-label', state.unread ? `Alertes (${state.unread} non lues)` : 'Alertes');
+}
+
 function renderNav() {
+  renderBell();
   const cur = location.hash.split('?')[0] || '#/planning';
   const active = (h) => cur === h || (h !== '#/planning' && cur.startsWith(h));
   const items = navItems();
@@ -135,6 +145,7 @@ const ROUTES = {
   '#/inscription': viewRegister,
   '#/mes-reservations': viewMyBookings,
   '#/mon-creneau': viewChooseSlot,
+  '#/alertes': viewAlerts,
   '#/profil': viewProfile,
   '#/admin': viewAdminSessions,
   '#/admin/annee': viewAdminYear,
@@ -148,7 +159,7 @@ async function router() {
   const path = location.hash.split('?')[0] || '#/planning';
   renderNav();
   document.getElementById('modal-root').innerHTML = '';
-  const needUser = ['#/mes-reservations', '#/profil', '#/mon-creneau'].includes(path) || path.startsWith('#/admin');
+  const needUser = ['#/mes-reservations', '#/profil', '#/mon-creneau', '#/alertes'].includes(path) || path.startsWith('#/admin');
   if (needUser && !state.user) { location.hash = '#/connexion'; return; }
   if (path.startsWith('#/admin') && !isAdmin()) { location.hash = '#/planning'; return; }
   const fn = ROUTES[path] || viewPlanning;
@@ -218,9 +229,29 @@ function memberAction(s) {
 }
 const needCredit = () => !!state.settings.makeup_requires_credit;
 
+// Créneaux attribués d'office, à valider par l'élève
+function pendingHtml() {
+  const pend = state.enrollments.filter((e) => e.status === 'pending');
+  return pend.map((e) => `<div class="pending-card">
+    <div><strong>Votre professeure vous a inscrit·e sur le créneau du ${DAYS[e.weekday].toLowerCase()} à ${e.start_time.replace(':', 'h')}</strong>
+    <div class="small">${esc(e.title)} · à partir du ${fmtLong(e.start_date)}. Votre place vous est gardée : merci de valider.</div></div>
+    <div class="btn-row"><button class="btn small" data-accept="${e.id}">Valider</button><button class="btn ghost small" data-decline="${e.id}">Refuser</button></div>
+  </div>`).join('');
+}
+
+async function answerEnrollment(id, accept, after) {
+  if (!accept && !(await confirmBox('Refuser ce créneau ? Votre place sera proposée à quelqu’un d’autre.', 'Refuser', true))) return;
+  try {
+    await api(`/api/enrollments/${id}/${accept ? 'accept' : 'decline'}`, { method: 'POST' });
+    toast(accept ? 'Créneau validé, à bientôt sur le tapis 🙏' : 'Créneau refusé');
+    afterChange(after);
+  } catch (e) { toast(e.message, true); }
+}
+
 // Bandeau « mon créneau + mes rattrapages »
 function slotBanner() {
   if (!state.user || isAdmin() && !state.enrollments.length) return '';
+  if (state.enrollments.some((e) => e.status === 'pending')) return pendingHtml();
   if (!state.enrollments.length) {
     return state.settings.allow_self_enroll
       ? `<div class="slot-banner"><div><strong>Choisissez votre créneau à l'année</strong><div class="small">Votre place sera réservée chaque semaine.</div></div><a class="btn small" href="#/mon-creneau">Choisir</a></div>`
@@ -423,6 +454,10 @@ function memberClicks(e, sessions, after, onFilter) {
   if (f && onFilter) { state.filter = f.dataset.filter; onFilter(); return; }
   const b = e.target.closest('[data-book]');
   if (b) { b.disabled = true; book(b.dataset.book, after); return; }
+  const ac = e.target.closest('[data-accept]');
+  if (ac) { answerEnrollment(ac.dataset.accept, true, after); return; }
+  const de = e.target.closest('[data-decline]');
+  if (de) { answerEnrollment(de.dataset.decline, false, after); return; }
   const u = e.target.closest('[data-unrelease]');
   if (u) { u.disabled = true; unrelease(u.dataset.unrelease, after); return; }
   const g = e.target.closest('[data-manage]');
@@ -447,10 +482,11 @@ async function viewMyBookings() {
       <div class="s-action">${memberAction(s)}</div>
     </div>`;
   const slots = state.enrollments.length
-    ? state.enrollments.map((e) => `<div class="list-item"><span class="dot" style="background:${esc(e.color)}"></span><div class="grow"><strong>${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} — ${esc(e.title)}</strong><div class="small muted">${e.duration_min} min${e.location ? ` · ${esc(e.location)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div></div>`).join('')
+    ? state.enrollments.map((e) => `<div class="list-item"><span class="dot" style="background:${esc(e.color)}"></span><div class="grow"><strong>${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} — ${esc(e.title)}</strong> ${e.status === 'pending' ? '<span class="badge warn">À valider</span>' : ''}<div class="small muted">${e.duration_min} min${e.location ? ` · ${esc(e.location)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div></div>`).join('')
     : `<p class="muted">Vous n'avez pas encore de créneau à l'année.</p>${state.settings.allow_self_enroll ? '<a class="btn" href="#/mon-creneau">Choisir mon créneau</a>' : '<p class="small muted">Votre professeure vous inscrira sur votre créneau.</p>'}`;
   $view.innerHTML = `
     <h1>Mes séances</h1>
+    ${pendingHtml()}
     <div class="grid2 my-top">
       <div class="card"><h2>Mon créneau à l'année</h2>${slots}</div>
       <div class="card credits-card"><h2>Mes rattrapages</h2>
@@ -493,6 +529,27 @@ async function viewChooseSlot() {
       location.hash = '#/mes-reservations';
     } catch (err) { toast(err.message, true); }
   };
+}
+
+// Alertes (cloche)
+async function viewAlerts() {
+  loading();
+  const { notifications } = await api('/api/notifications');
+  if (notifications.some((n) => !n.read_at)) { api('/api/notifications/read', { method: 'POST' }).catch(() => {}); state.unread = 0; renderBell(); }
+  const ago = (d) => {
+    const t = new Date(d.replace(' ', 'T') + 'Z'); const m = Math.round((Date.now() - t) / 60000);
+    if (m < 1) return 'à l’instant'; if (m < 60) return `il y a ${m} min`; if (m < 1440) return `il y a ${Math.round(m / 60)} h`;
+    return t.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  };
+  const icon = { place: '🪷', enrollment: '📅', admin: '🔔' };
+  $view.innerHTML = `
+    <h1>Alertes</h1>
+    ${notifications.length ? `<div class="card">${notifications.map((n) => `
+      <div class="list-item alert ${n.read_at ? '' : 'unread'}">
+        <span class="alert-ico" aria-hidden="true">${icon[n.kind] || '🔔'}</span>
+        <div class="grow"><strong>${esc(n.title)}</strong><div class="small muted">${esc(n.body)}</div><div class="small muted">${ago(n.created_at)}</div></div>
+        ${n.link ? `<a class="btn ${n.kind === 'place' ? '' : 'secondary'} small" href="${esc(n.link)}">${n.kind === 'place' ? 'Réserver' : n.kind === 'enrollment' ? 'Valider' : 'Voir'}</a>` : ''}
+      </div>`).join('')}</div>` : '<div class="empty"><div class="big">🔔</div>Aucune alerte pour le moment.<br>Vous serez prévenu·e ici dès qu’une place se libère.</div>'}`;
 }
 
 function viewLogin() {
@@ -560,6 +617,7 @@ function viewProfile() {
         <div class="field"><label for="name">Nom</label><input id="name" name="name" value="${esc(u.name)}" required></div>
         <div class="field"><label for="phone">Téléphone</label><input id="phone" name="phone" type="tel" value="${esc(u.phone)}"></div>
       </div>
+      <div class="field"><label class="check"><input type="checkbox" name="notify_email" ${u.notify_email !== false ? 'checked' : ''}>Recevoir aussi les alertes par e-mail (places libres, créneau à valider)</label></div>
       <h3>Changer de mot de passe</h3>
       <div class="grid2">
         <div class="field"><label for="cp">Mot de passe actuel</label><input id="cp" name="current_password" type="password" autocomplete="current-password"></div>
@@ -838,18 +896,18 @@ async function enrollmentsModal(t, after) {
   modal(`
     <div class="modal-head"><h2>${esc(t.title)}</h2><button class="icon-btn" data-close aria-label="Fermer">✕</button></div>
     <p>${DAYS[t.weekday]} ${t.start_time.replace(':', 'h')} · <span class="badge plum">${enrollments.length} / ${t.capacity} inscrit·es à l’année</span></p>
-    ${enrollments.length ? enrollments.map((e) => `<div class="list-item"><div class="grow"><strong>${esc(e.name)}</strong><div class="small muted">${esc(e.email)}${e.phone ? ` · ${esc(e.phone)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div>
+    ${enrollments.length ? enrollments.map((e) => `<div class="list-item"><div class="grow"><strong>${esc(e.name)}</strong> ${e.status === 'pending' ? '<span class="badge warn">En attente de validation</span>' : '<span class="badge ok">Validé</span>'}<div class="small muted">${esc(e.email)}${e.phone ? ` · ${esc(e.phone)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div>
       <button class="btn ghost small" data-end="${e.id}">Retirer</button></div>`).join('') : '<p class="muted small">Personne pour le moment.</p>'}
     ${enrollments.length < t.capacity && others.length ? `<div class="btn-row" style="margin-top:14px">
       <select id="who" style="flex:1"><option value="">Inscrire un membre à l’année…</option>${others.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
-      <button class="btn small" id="addenr">Inscrire</button></div>` : ''}
+      <button class="btn small" id="addenr">Inscrire</button></div><p class="small muted">L’élève est prévenu·e (alerte + e-mail) et doit valider son créneau. Sa place est gardée en attendant.</p>` : ''}
     ${enrollments.length ? `<p class="small" style="margin-top:14px"><a href="mailto:?bcc=${encodeURIComponent(enrollments.map((e) => e.email).join(','))}">✉ Écrire aux inscrit·es de ce créneau</a></p>` : ''}`, (m, close) => {
     const reopen = () => { close(); after && after(); enrollmentsModal(t, after); };
     const add = m.querySelector('#addenr');
     if (add) add.onclick = async () => {
       const uid = m.querySelector('#who').value;
       if (!uid) return;
-      try { const r = await api(`/api/admin/templates/${t.id}/enrollments`, { method: 'POST', body: { user_id: Number(uid) } }); toast(`Inscrit·e à partir du ${fmtLong(r.start_date)}`); reopen(); }
+      try { const r = await api(`/api/admin/templates/${t.id}/enrollments`, { method: 'POST', body: { user_id: Number(uid) } }); toast(`Inscrit·e à partir du ${fmtLong(r.start_date)} — en attente de validation`); reopen(); }
       catch (err) { toast(err.message, true); }
     };
     m.addEventListener('click', async (e) => {
@@ -1099,6 +1157,8 @@ async function refreshMe() {
   state.settings = r.settings;
   state.credits = r.credits;
   state.enrollments = r.enrollments;
+  state.unread = r.unread || 0;
+  renderBell();
   document.title = `${r.settings.studio_name} — Réservations`;
 }
 
@@ -1107,5 +1167,9 @@ window.addEventListener('hashchange', router);
   try { await refreshMe(); } catch { /* hors ligne */ }
   if (!location.hash) history.replaceState(null, '', '#/planning');
   router();
+  setInterval(async () => {
+    if (!state.user || document.hidden) return;
+    try { const r = await api('/api/me'); state.unread = r.unread || 0; renderBell(); } catch { /* hors ligne */ }
+  }, 60000);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 })();

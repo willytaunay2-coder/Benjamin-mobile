@@ -100,6 +100,19 @@ CREATE TABLE IF NOT EXISTS absences (
   UNIQUE (session_id, user_id)
 );
 
+-- Alertes dans l'application (cloche)
+CREATE TABLE IF NOT EXISTS notifications (
+  id         INTEGER PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  body       TEXT NOT NULL DEFAULT '',
+  link       TEXT NOT NULL DEFAULT '',
+  read_at    TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_notifications_user ON notifications(user_id, id);
+
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -117,6 +130,10 @@ INSERT OR IGNORE INTO settings(key, value) VALUES
 function migrate(db) {
   const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!cols.includes('credit_adjust')) db.exec('ALTER TABLE users ADD COLUMN credit_adjust INTEGER NOT NULL DEFAULT 0');
+  if (!cols.includes('notify_email')) db.exec('ALTER TABLE users ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1');
+  const ecols = db.prepare('PRAGMA table_info(enrollments)').all().map((c) => c.name);
+  // 'pending' : inscrit·e d'office par la professeure, en attente de validation par l'élève
+  if (!ecols.includes('status')) db.exec("ALTER TABLE enrollments ADD COLUMN status TEXT NOT NULL DEFAULT 'confirmed'");
 }
 
 function openDb(file) {

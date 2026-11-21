@@ -281,3 +281,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--lavender); 
 .my-top { align-items: stretch; }
 .my-top .card { margin-bottom: 14px; }
 @media (max-width: 640px) { .my-top { grid-template-columns: 1fr; gap: 0; } }
+
+/* ---------- Alertes ---------- */
+.bell { position: relative; margin-left: auto; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; color: var(--mauve); border-radius: 50%; }
+.bell svg { width: 26px; height: 26px; }
+.bell:hover { background: rgba(255,255,255,.6); }
+@media (min-width: 760px) { .bell { margin-left: 4px; } }
+.bell-n { position: absolute; top: 4px; right: 2px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: .7rem; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.alert.unread { background: var(--plum-soft); margin: 0 -18px; padding-left: 18px; padding-right: 18px; }
+.alert-ico { font-size: 1.4rem; }
+.pending-card { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; background: var(--warn-soft); border: 1px solid #efd3b4; border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px; }
+.pending-card > div:first-child { flex: 1 1 220px; }
