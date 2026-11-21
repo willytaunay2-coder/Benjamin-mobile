@@ -511,3 +511,6 @@ table.roll .sign { width: 28%; }
 .alert.unread .alert-ico { background: #fff; box-shadow: 0 2px 8px -3px rgba(74, 29, 56, .25); }
 .alert.unread { margin: 4px -10px; padding: 14px 12px 14px 20px; border-radius: 18px; border-bottom: 0; }
 .alert.unread::before { left: 7px; }
+/* Description du cours : une ligne sur le planning (le texte complet reste au survol) */
+.s-desc { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+@media (min-width: 760px) { .s-desc { -webkit-line-clamp: 2; } }

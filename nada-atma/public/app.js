@@ -202,7 +202,7 @@ function sessionCard(s, { admin = false } = {}) {
       <div class="s-title">${esc(s.title)}</div>
       <div class="s-meta">${meta}</div>
       ${s.cancelled && s.cancel_reason ? `<div class="small muted">${esc(s.cancel_reason)}</div>` : ''}
-      ${s.description && !admin ? `<div class="small muted">${esc(s.description)}</div>` : ''}
+      ${s.description && !admin ? `<div class="small muted s-desc" title="${esc(s.description)}">${esc(s.description)}</div>` : ''}
     </div>
     <div class="s-action">${action}</div>
   </div>`;
