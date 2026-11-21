@@ -804,7 +804,7 @@ function createApp(db, opts = {}) {
   }
 
   // ---------- Dispatcher ----------
-  return async function handler(req, res) {
+  const handler = async function handler(req, res) {
     const url = new URL(req.url, 'http://localhost');
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
@@ -835,6 +835,8 @@ function createApp(db, opts = {}) {
       return send(res, 500, { error: 'Erreur interne' });
     }
   };
+  handler.generate = generate; // utilisé par les scripts d'initialisation
+  return handler;
 }
 
 module.exports = { createApp, hashPassword, verifyPassword };

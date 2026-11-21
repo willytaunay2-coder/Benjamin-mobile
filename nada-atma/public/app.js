@@ -243,7 +243,7 @@ function weekHtml(from, data, { admin = false } = {}) {
     const closure = data.closures.find((c) => c.start_date <= d && c.end_date >= d);
     // côté élèves, les séances annulées par une fermeture sont remplacées par le bandeau
     const list = (byDay[d] || []).filter((s) => admin || !(s.cancelled && s.closure_id && !s.my_status));
-    if (!list.length && !closure && !admin && (i >= 5)) continue; // masque le week-end vide
+    if (!list.length && !closure && !admin) continue; // élèves : on n'affiche que les jours de cours
     html += `<section class="day"><h3 class="day-title ${d === today() ? 'today' : ''}">${fmtLong(d)}</h3>`;
     if (closure) html += `<div class="closure-banner">🌿 ${esc(closure.label)} — pas de cours</div>`;
     if (list.length) html += list.map((s) => sessionCard(s, { admin })).join('');
