@@ -221,7 +221,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--lavender); 
 /* ---------- Listes ---------- */
 .list-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .list-item:last-child { border-bottom: 0; }
-.list-item .grow { flex: 1; min-width: 0; }
+.list-item { flex-wrap: wrap; }
+.list-item .grow { flex: 1 1 200px; min-width: 0; }
 .subnav { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 18px; scrollbar-width: none; }
 .subnav a { text-decoration: none; }
 .empty { text-align: center; color: var(--muted); padding: 30px 10px; }
