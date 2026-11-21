@@ -10,40 +10,35 @@ Une seule version à maintenir, pas besoin de passer par l'App Store.
 
 ## Fonctionnement
 
-**Un créneau à l'année, à valider.** En début de saison, la professeure inscrit d'office chaque élève sur son
-créneau (ex. mardi 19h). L'élève reçoit une alerte et un e-mail, puis **valide** (ou refuse) dans l'application ; sa
-place est gardée en attendant. Sa place est ensuite réservée toutes les semaines, hors vacances.
+**Un abonnement = un cours par semaine.** Chaque élève est inscrit·e sur un seul créneau pour l'année
+(ex. mardi 19h) : sa place l'attend chaque semaine, hors vacances.
 
-**« Je ne viens pas » → ma place est disponible.** Si l'élève ne peut pas venir, il libère sa place en un clic :
-elle devient libre, **tous les autres élèves sont prévenus** (alerte dans l'application 🔔 + e-mail), et il gagne
-**un rattrapage** (s'il prévient au moins 12 h avant, délai réglable). Le premier qui réserve prend la place.
+**Répartition selon les préférences.** Les élèves classent leurs créneaux préférés (1er, 2e, 3e choix) dans
+« Mes préférences ». Dans Gestion › Répartition, la professeure lance une **proposition automatique** (par ordre
+d'arrivée des demandes : 1er choix si possible, sinon 2e puis 3e), l'ajuste, puis inscrit. Chaque élève reçoit une
+alerte + un e-mail et **valide** (ou refuse) son créneau ; sa place est gardée en attendant.
 
-**Rattrapage sur un créneau libre.** Avec ce rattrapage, il réserve n'importe quelle place libre du planning,
-ou utilise directement « Venir un autre jour » (libération + réservation en une seule fois).
-Une séance annulée par la professeure donne aussi un rattrapage ; pas les vacances.
+**« Je ne viens pas » → la place est libre, sans rattrapage.** L'élève libère sa place en un clic ; **tous les
+autres élèves sont prévenus** (alerte 🔔 + e-mail) et le premier qui la prend l'a. Le cours n'est pas rattrapé.
+« Je viens finalement » rend la place tant que personne ne l'a prise.
 
 ## Fonctionnalités
 
 **Pour les élèves**
-- Choix de son créneau à l'année (places limitées par créneau) — ou inscription par la professeure
-- Planning semaine par semaine (consultable sans compte), filtre par cours, places libres affichées
-- « Je ne viens pas » / « Je viens finalement » (si la place n'a pas été reprise entre-temps)
-- Compteur de rattrapages, réservation d'une place libre, déplacement ou annulation d'un rattrapage
-- « Mes séances » : mon créneau, mes rattrapages, mes prochaines séances, historique
+- Mes préférences de créneau, validation du créneau attribué
+- Planning semaine par semaine, places libres visibles, « Prendre la place »
+- « Je ne viens pas » / « Je viens finalement », alertes et e-mails
+- « Mes séances » : mon cours de la semaine, prochaines séances, historique
 
 **Pour la professeure (onglet « Gestion »)**
-- **Cours réguliers** : un cours crée toutes les séances de la saison ; bouton « 👥 x/12 à l'année » pour voir,
-  inscrire ou retirer les élèves du créneau
-- **Vacances & fermetures** (import des vacances scolaires zone A/B/C, jours fériés sautés)
-- **Vue annuelle** et **vue semaine** ; détail d'une séance : inscrits à l'année, rattrapages, places libérées ;
-  noter une absence, rendre une place, annuler une séance (rattrapage offert aux inscrits)
+- **Répartition** de l'année selon les préférences (proposition automatique + ajustements)
+- **Cours réguliers** : un cours crée toutes les séances de la saison ; liste des inscrit·es à l'année par créneau
 - **Déplacer une séance** (date, heure) ou **ajouter une séance** : tous les élèves sont prévenus (alerte + e-mail) ;
   les inscrit·es d'une séance annulée ou rétablie aussi
-- **Feuille d'appel** imprimable pour chaque journée (bouton « Appel » sur chaque jour, ou onglet Gestion › Appel) :
-  une ligne par élève avec case « Présent », lignes vides pour les imprévus, liste des places libérées
-- **Membres** : créneau, nombre de rattrapages, ajout/retrait manuel de rattrapages
-- **Réglages** : délai pour libérer sa place avec rattrapage, ouverture des réservations, choix du créneau par
-  les élèves eux-mêmes ou non, rattrapage obligatoire ou non pour prendre une place libre
+- **Feuille d'appel** imprimable pour chaque journée (bouton « Appel » sur chaque jour, ou Gestion › Appel)
+- **Vacances & fermetures** (import des vacances scolaires zone A/B/C, jours fériés sautés)
+- **Vue annuelle**, **vue semaine**, détail d'une séance (inscrit·es, places libérées, places prises), noter une absence
+- **Membres** et **Réglages**
 
 ## Démarrage
 

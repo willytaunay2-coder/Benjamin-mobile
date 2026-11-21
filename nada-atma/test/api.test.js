@@ -168,111 +168,58 @@ test('sécurité : JSON requis et mot de passe vérifié', async (t) => {
   assert.equal(res.status, 415);
 });
 
-test('créneau à l\'année : libérer sa place, rattrapage, reprendre sa place', async (t) => {
+test('abonnement : un créneau par personne, préférences, répartition, place libérée sans rattrapage', async (t) => {
   NOW = new Date(2026, 8, 4, 10, 0);
   const { server, client } = await start();
   t.after(() => server.close());
-  const admin = client(), alice = client(), bob = client(), carol = client();
+  const admin = client();
   await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
-  await alice('POST', '/api/register', { name: 'Alice', email: 'alice@example.com', password: 'motdepasse1' });
-  await bob('POST', '/api/register', { name: 'Bob', email: 'bob@example.com', password: 'motdepasse1' });
-  await carol('POST', '/api/register', { name: 'Carol', email: 'carol@example.com', password: 'motdepasse1' });
+  const c = {}, id = {};
+  for (const n of ['Alice', 'Bob', 'Carol', 'Dan']) {
+    c[n] = client();
+    id[n] = (await c[n]('POST', '/api/register', { name: n, email: n.toLowerCase() + '@example.com', password: 'motdepasse1' })).data.user.id;
+  }
+  // Deux créneaux de 2 places
+  const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
+  const jeu = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 4, start_time: '12:15', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
 
-  // Deux créneaux de 2 places : mardi et jeudi
-  const mar = (await admin('POST', '/api/admin/templates', { title: 'Hatha', weekday: 2, start_time: '18:30', duration_min: 75, capacity: 2, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
-  const jeu = (await admin('POST', '/api/admin/templates', { title: 'Doux', weekday: 4, start_time: '10:00', duration_min: 75, capacity: 2, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
+  // Préférences, dans l'ordre d'arrivée : tout le monde veut le mardi d'abord
+  for (const n of ['Alice', 'Bob', 'Carol']) {
+    assert.equal((await c[n]('PUT', '/api/my/preferences', { template_ids: [mar.id, jeu.id] })).status, 200);
+    await new Promise((res) => setTimeout(res, 1100)); // horodatage à la seconde
+  }
+  assert.equal((await c.Dan('PUT', '/api/my/preferences', { template_ids: [mar.id, mar.id] })).status, 400);
 
-  // Inscriptions à l'année
-  assert.equal((await alice('POST', `/api/templates/${mar.id}/enroll`)).status, 200);
-  assert.equal((await bob('POST', `/api/templates/${mar.id}/enroll`)).status, 200);
-  let r = await carol('POST', `/api/templates/${mar.id}/enroll`);
-  assert.equal(r.status, 409); // créneau complet
-  assert.equal((await carol('POST', `/api/templates/${jeu.id}/enroll`)).status, 200);
+  // Proposition : Alice et Bob mardi (1er choix), Carol jeudi (2e choix), Dan sans préférence
+  const prop = (await admin('POST', '/api/admin/assignments/propose')).data.proposals;
+  const by = Object.fromEntries(prop.map((p) => [p.user_id, p]));
+  assert.equal(by[id.Alice].template_id, mar.id);
+  assert.equal(by[id.Bob].template_id, mar.id);
+  assert.equal(by[id.Carol].template_id, jeu.id);
+  assert.equal(by[id.Carol].choice, 2);
+  assert.equal(by[id.Dan], undefined);
+  let r = await admin('POST', '/api/admin/assignments/apply', { assignments: prop });
+  assert.equal(r.data.done, 3);
+  assert.equal((await c.Alice('GET', '/api/me')).data.enrollments[0].status, 'pending');
 
-  let tpl = (await carol('GET', '/api/templates')).data.templates;
-  assert.equal(tpl.find((x) => x.id === mar.id).free, 0);
-  assert.equal(tpl.find((x) => x.id === jeu.id).free, 1);
+  // Un abonnement = un seul créneau par semaine
+  r = await admin('POST', `/api/admin/templates/${jeu.id}/enrollments`, { user_id: id.Alice });
+  assert.equal(r.status, 409);
+  assert.match(r.data.error, /un cours par semaine/);
 
-  // Mardi 8 sept : complet (Alice + Bob), Alice y est attendue
-  let week = (await alice('GET', '/api/sessions?from=2026-09-07&to=2026-09-13')).data.sessions;
-  const tue = week.find((s) => s.date === '2026-09-08'), thu = week.find((s) => s.date === '2026-09-10');
-  assert.equal(tue.my_status, 'enrolled');
+  // Alice ne vient pas mardi 8 : la place se libère, pas de rattrapage, Dan peut la prendre
+  const tue = (await c.Alice('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0];
   assert.equal(tue.spots_left, 0);
-  assert.equal(thu.spots_left, 1);
-
-  // Carol (jeudi) ne peut pas réserver mardi : complet, et pas de crédit
-  r = await carol('POST', `/api/sessions/${tue.id}/book`);
-  assert.equal(r.status, 409);
-
-  // Alice ne vient pas mardi : sa place se libère, elle gagne 1 rattrapage
-  r = await alice('POST', `/api/sessions/${tue.id}/release`);
+  r = await c.Alice('POST', `/api/sessions/${tue.id}/release`);
   assert.equal(r.status, 200);
-  assert.equal(r.data.with_credit, true);
-  assert.equal(r.data.credits, 1);
-  week = (await carol('GET', '/api/sessions?from=2026-09-07&to=2026-09-13')).data.sessions;
-  assert.equal(week.find((s) => s.id === tue.id).spots_left, 1);
-
-  // Carol n'a pas de crédit : refus
-  r = await carol('POST', `/api/sessions/${tue.id}/book`);
-  assert.equal(r.status, 409);
-  assert.match(r.data.error, /rattrapage/);
-
-  // Alice utilise son rattrapage le jeudi
-  r = await alice('POST', `/api/sessions/${thu.id}/book`);
-  assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(r.data.credits, 0);
-  // plus de crédit pour une 2e réservation
-  const thu2 = (await alice('GET', '/api/sessions?from=2026-09-17&to=2026-09-17')).data.sessions[0];
-  assert.equal((await alice('POST', `/api/sessions/${thu2.id}/book`)).status, 409);
-
-  // Carol reçoit un crédit de l'admin puis prend la place libérée par Alice
-  const users = (await admin('GET', '/api/admin/users')).data.users;
-  const carolId = users.find((u) => u.name === 'Carol').id;
-  assert.equal((await admin('POST', `/api/admin/users/${carolId}/credits`, { delta: 1 })).data.credits, 1);
-  assert.equal((await carol('POST', `/api/sessions/${tue.id}/book`)).status, 200);
-
-  // Alice veut revenir mardi : sa place a été prise
-  r = await alice('POST', `/api/sessions/${tue.id}/unrelease`);
-  assert.equal(r.status, 409);
-  assert.match(r.data.error, /prise/);
-
-  // Détail admin de la séance : Bob (année) + Carol (rattrapage), Alice absente
-  const d = (await admin('GET', `/api/admin/sessions/${tue.id}`)).data;
-  assert.deepEqual(d.attendees.map((a) => a.name + ':' + a.kind).sort(), ['Bob:regular', 'Carol:makeup']);
-  assert.deepEqual(d.absent.map((a) => a.name), ['Alice']);
-
-  // Déplacer en une fois : Bob déplace son mardi 15 vers le jeudi 17 (place libre)
-  const tue15 = (await bob('GET', '/api/sessions?from=2026-09-15&to=2026-09-15')).data.sessions[0];
-  r = await bob('POST', `/api/sessions/${tue15.id}/swap`, { target_session_id: thu2.id });
-  assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(r.data.session.my_status, 'booked');
-  assert.equal(r.data.credits, 0);
-  // Bob revient sur son créneau : le swap inverse annule l'absence
-  r = await bob('POST', `/api/sessions/${thu2.id}/swap`, { target_session_id: tue15.id });
-  assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(r.data.session.my_status, 'enrolled');
-
-  // Libérer trop tard : pas de crédit
-  NOW = new Date(2026, 8, 22, 15, 0); // 3h30 avant le mardi 22 18h30
-  const tue22 = (await bob('GET', '/api/sessions?from=2026-09-22&to=2026-09-22')).data.sessions[0];
-  r = await bob('POST', `/api/sessions/${tue22.id}/release`);
-  assert.equal(r.data.with_credit, false);
-  assert.equal(r.data.credits, 0);
-
-  // Séance annulée par la prof : crédit pour les inscrits à l'année
-  NOW = new Date(2026, 8, 4, 10, 0);
-  const tue29 = (await admin('GET', '/api/sessions?from=2026-09-29&to=2026-09-29')).data.sessions[0];
-  await admin('PUT', `/api/admin/sessions/${tue29.id}`, { cancelled: true, cancel_reason: 'Prof absente' });
-  assert.equal((await bob('GET', '/api/me')).data.credits, 1);
-  // ... mais pas pour les vacances
-  await admin('POST', '/api/admin/closures', { label: 'Toussaint', start_date: '2026-10-17', end_date: '2026-11-01' });
-  assert.equal((await bob('GET', '/api/me')).data.credits, 1);
-
-  // Fin d'inscription par l'admin
-  const enr = (await admin('GET', `/api/admin/templates/${mar.id}/enrollments`)).data.enrollments;
-  assert.equal(enr.length, 2);
-  assert.equal((await admin('DELETE', `/api/admin/enrollments/${enr[0].id}`)).status, 200);
-  assert.equal((await admin('GET', `/api/admin/templates/${mar.id}/enrollments`)).data.enrollments.length, 1);
+  assert.equal((await c.Dan('GET', '/api/notifications')).data.notifications[0].kind, 'place');
+  assert.equal((await c.Dan('POST', `/api/sessions/${tue.id}/book`)).status, 200); // aucun crédit requis
+  // Alice ne peut plus revenir : sa place est prise
+  assert.equal((await c.Alice('POST', `/api/sessions/${tue.id}/unrelease`)).status, 409);
+  // Une place libérée puis reprise par soi-même fonctionne si personne ne l'a prise
+  const tue15 = (await c.Bob('GET', '/api/sessions?from=2026-09-15&to=2026-09-15')).data.sessions[0];
+  await c.Bob('POST', `/api/sessions/${tue15.id}/release`);
+  assert.equal((await c.Bob('POST', `/api/sessions/${tue15.id}/unrelease`)).status, 200);
 });
 
 test('inscription d\'office à valider + alerte « place libre » à tous les élèves', async (t) => {

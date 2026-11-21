@@ -1,7 +1,7 @@
 'use strict';
 /* Nada Atma — application de réservation (SPA sans dépendance) */
 
-const state = { user: null, settings: {}, filter: '', credits: 0, enrollments: [], unread: 0 };
+const state = { user: null, settings: {}, filter: '', enrollments: [], unread: 0 };
 const $view = document.getElementById('view');
 
 // ---------- Utilitaires ----------
@@ -154,6 +154,7 @@ const ROUTES = {
   '#/admin/membres': viewAdminUsers,
   '#/admin/reglages': viewAdminSettings,
   '#/admin/appel': viewAttendance,
+  '#/admin/repartition': viewAssignments,
 };
 
 async function router() {
@@ -205,11 +206,7 @@ function sessionCard(s, { admin = false } = {}) {
 
 // Boutons d'une séance pour un·e élève selon sa situation
 function memberAction(s) {
-  if (s.cancelled) {
-    if (s.my_status === 'enrolled' || s.my_status === 'released') return '<span class="badge danger">Annulée</span><div class="small muted">Rattrapage offert</div>';
-    if (s.my_status === 'booked') return `<span class="badge danger">Annulée</span><button class="btn ghost small" data-manage="${s.id}">Déplacer</button>`;
-    return '<span class="badge danger">Annulée</span>';
-  }
+  if (s.cancelled) return '<span class="badge danger">Annulée</span>';
   if (s.is_past) {
     return s.my_status === 'enrolled' || s.my_status === 'booked' ? '<span class="badge ok">Venu·e</span>' : '<span class="badge">Passée</span>';
   }
@@ -220,15 +217,11 @@ function memberAction(s) {
     return `<span class="badge warn">Place libérée</span>${s.spots_left > 0 ? `<button class="btn ghost small" data-unrelease="${s.id}">Je viens finalement</button>` : ''}`;
   }
   if (s.my_status === 'booked') {
-    return `<span class="badge ok">Rattrapage</span><button class="btn ghost small" data-manage="${s.id}">Gérer</button>`;
+    return `<span class="badge ok">Réservé</span><button class="btn ghost small" data-manage="${s.id}">Annuler</button>`;
   }
   if (s.spots_left <= 0) return '<span class="badge plum">Complet</span>';
-  if (state.user && needCredit() && state.credits <= 0) {
-    return '<span class="badge">Place libre</span><div class="small muted">Sans rattrapage dispo</div>';
-  }
-  return `<button class="btn small" data-book="${s.id}">${needCredit() && state.user ? 'Rattraper ici' : 'Réserver'}</button>`;
+  return `<button class="btn small" data-book="${s.id}">Prendre la place</button>`;
 }
-const needCredit = () => !!state.settings.makeup_requires_credit;
 
 // Créneaux attribués d'office, à valider par l'élève
 function pendingHtml() {
@@ -249,18 +242,16 @@ async function answerEnrollment(id, accept, after) {
   } catch (e) { toast(e.message, true); }
 }
 
-// Bandeau « mon créneau + mes rattrapages »
+// Bandeau « mon créneau »
 function slotBanner() {
   if (!state.user || isAdmin() && !state.enrollments.length) return '';
   if (state.enrollments.some((e) => e.status === 'pending')) return pendingHtml();
   if (!state.enrollments.length) {
-    return state.settings.allow_self_enroll
-      ? `<div class="slot-banner"><div><strong>Choisissez votre créneau à l'année</strong><div class="small">Votre place sera réservée chaque semaine.</div></div><a class="btn small" href="#/mon-creneau">Choisir</a></div>`
-      : '';
+    return `<div class="slot-banner"><div><strong>Votre créneau de l'année</strong><div class="small">Indiquez vos préférences : votre professeure vous inscrira selon les places.</div></div><a class="btn small" href="#/mon-creneau">Mes préférences</a></div>`;
   }
-  const slots = state.enrollments.map((e) => `${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} · ${esc(e.title)}`).join('<br>');
-  return `<div class="slot-banner"><div><div class="small muted">Mon créneau à l'année</div><strong>${slots}</strong></div>
-    <div class="credits"><span class="credits-n">${state.credits}</span><span class="small">rattrapage${state.credits > 1 ? 's' : ''}<br>disponible${state.credits > 1 ? 's' : ''}</span></div></div>`;
+  const e = state.enrollments[0];
+  return `<div class="slot-banner"><div><div class="small muted">Mon cours de la semaine</div><strong>${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} · ${esc(e.title)}</strong>
+    <div class="small">Un empêchement ? « Je ne viens pas » libère votre place pour les autres.</div></div></div>`;
 }
 
 function weekHtml(from, data, { admin = false } = {}) {
@@ -319,99 +310,34 @@ function deadlineInfo(s) {
   return { late: start - new Date() < h * 3600000, hours: h };
 }
 
-// Fenêtre « Je ne viens pas » (créneau) ou « Gérer » (rattrapage)
+// Fenêtre « Je ne viens pas » (son créneau) ou annulation d'une place libre réservée
 function manageSession(s, after) {
   const { late, hours } = deadlineInfo(s);
-  const enrolled = s.my_status === 'enrolled';
   const head = `<div class="modal-head"><h2>${esc(s.title)}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <p><strong style="text-transform:capitalize">${fmtFull(s.date)}</strong><br>${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}${s.location ? ` · ${esc(s.location)}` : ''}</p>`;
-  if (s.cancelled) { moveSession(s, after); return; }
-  if (enrolled) {
+  if (s.my_status === 'enrolled') {
     modal(`${head}
-      <p>Vous ne pouvez pas venir ? Libérez votre place : quelqu'un d'autre pourra la prendre${late ? '' : ', et vous gagnez <strong>un rattrapage</strong> à utiliser sur un créneau libre'}.</p>
-      ${late ? `<p class="badge warn">Moins de ${hours} h avant la séance : la place sera libérée, mais sans rattrapage.</p>` : ''}
-      <div class="btn-row" style="margin-top:14px">
-        <button class="btn" id="release">Libérer ma place</button>
-        ${late ? '' : '<button class="btn secondary" id="move"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h14l-3.5-3.5M20 16H6l3.5 3.5"/></svg>Venir un autre jour</button>'}
-      </div>`, (m, close) => {
+      <p>Vous ne pouvez pas venir ? Libérez votre place : les autres élèves sont prévenus qu’une place est disponible.</p>
+      <p class="small muted">Le cours n’est pas rattrapé. Si vous changez d’avis, « Je viens finalement » vous rend votre place tant que personne ne l’a prise.</p>
+      <div class="btn-row" style="margin-top:14px"><button class="btn" id="release">Libérer ma place</button><button class="btn ghost" data-close>Retour</button></div>`, (m, close) => {
       m.querySelector('#release').onclick = async () => {
         try {
-          const r = await api(`/api/sessions/${s.id}/release`, { method: 'POST' });
-          close();
-          toast(r.with_credit ? `Place libérée. Vous avez ${plural(r.credits, 'rattrapage')} disponible${r.credits > 1 ? 's' : ''}` : 'Place libérée (sans rattrapage, délai dépassé)');
-          afterChange(after);
+          await api(`/api/sessions/${s.id}/release`, { method: 'POST' });
+          close(); toast('Place libérée — les autres élèves sont prévenus'); afterChange(after);
         } catch (e) { toast(e.message, true); }
       };
-      const mv = m.querySelector('#move');
-      if (mv) mv.onclick = () => { close(); moveSession(s, after); };
     });
     return;
   }
-  // rattrapage / réservation ponctuelle
+  // place libre réservée ponctuellement
   modal(`${head}
-    ${late && !isAdmin() ? `<p class="badge warn">Modification impossible moins de ${hours} h avant la séance</p><p class="small muted">Contactez directement votre professeure si besoin.</p>` : '<p class="small muted">En annulant, votre rattrapage vous est rendu.</p>'}
-    <div class="btn-row" style="margin-top:14px">
-      <button class="btn" id="move" ${late ? 'disabled' : ''}><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h14l-3.5-3.5M20 16H6l3.5 3.5"/></svg>Déplacer</button>
-      <button class="btn danger" id="cancel" ${late ? 'disabled' : ''}>Annuler</button>
-    </div>`, (m, close) => {
-    m.querySelector('#move').onclick = () => { close(); moveSession(s, after); };
+    ${late && !isAdmin() ? `<p class="badge warn">Annulation impossible moins de ${hours} h avant la séance</p><p class="small muted">Contactez directement votre professeure si besoin.</p>` : '<p class="small muted">En annulant, la place redevient libre pour les autres.</p>'}
+    <div class="btn-row" style="margin-top:14px"><button class="btn danger" id="cancel" ${late ? 'disabled' : ''}>Annuler ma réservation</button><button class="btn ghost" data-close>Retour</button></div>`, (m, close) => {
     m.querySelector('#cancel').onclick = async () => {
-      try { await api(`/api/bookings/${s.my_booking_id}/cancel`, { method: 'POST' }); close(); toast('Réservation annulée, rattrapage rendu'); afterChange(after); }
+      try { await api(`/api/bookings/${s.my_booking_id}/cancel`, { method: 'POST' }); close(); toast('Réservation annulée'); afterChange(after); }
       catch (e) { toast(e.message, true); }
     };
   });
-}
-
-// Choisir une autre séance libre (déplacement en une seule opération)
-function moveSession(from, after) {
-  let horizon = 28;
-  const close = modal(`
-    <div class="modal-head"><h2>Venir un autre jour</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-    <p class="small muted">Au lieu de : ${esc(from.title)} — ${fmtLong(from.date)} à ${from.start_time.replace(':', 'h')}</p>
-    <div class="filters"><button class="chip" data-same="1">Même cours</button><button class="chip active" data-same="0">Tous les créneaux libres</button></div>
-    <div id="alts"><div class="spinner"></div></div>`, (m) => {
-    let same = false;
-    const load = async () => {
-      const alts = m.querySelector('#alts');
-      alts.innerHTML = '<div class="spinner"></div>';
-      try {
-        const data = await api(`/api/sessions?from=${today()}&to=${addDays(today(), horizon)}`);
-        const list = data.sessions.filter((s) => !s.cancelled && !s.is_past && s.spots_left > 0 && s.id !== from.id
-          && (!s.my_status || s.my_status === 'released') && (!same || s.title === from.title));
-        if (!list.length) {
-          alts.innerHTML = `<div class="empty">Aucune place libre sur les ${horizon} prochains jours.</div>`;
-        } else {
-          let last = '';
-          alts.innerHTML = list.map((s) => {
-            const head = s.date !== last ? `<h3 class="day-title">${fmtLong(s.date)}</h3>` : '';
-            last = s.date;
-            return `${head}<div class="session" style="--c:${esc(s.color)}">
-              <div class="s-time">${s.start_time.replace(':', 'h')}</div>
-              <div class="s-body"><div class="s-title">${esc(s.title)}</div><div class="s-meta">${s.my_status === 'released' ? '<span>Votre créneau habituel</span>' : spotsHtml(s)}</div></div>
-              <div class="s-action"><button class="btn small" data-target="${s.id}">Choisir</button></div></div>`;
-          }).join('');
-        }
-        if (horizon < 180) alts.insertAdjacentHTML('beforeend', '<div class="center"><button class="btn ghost" id="more">Voir plus loin</button></div>');
-      } catch (e) { alts.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
-    };
-    m.addEventListener('click', async (e) => {
-      const chip = e.target.closest('[data-same]');
-      if (chip) { same = chip.dataset.same === '1'; m.querySelectorAll('[data-same]').forEach((c) => c.classList.toggle('active', c === chip)); load(); }
-      if (e.target.id === 'more') { horizon += 42; load(); }
-      const t = e.target.closest('[data-target]');
-      if (t) {
-        t.disabled = true;
-        try {
-          const r = await api(`/api/sessions/${from.id}/swap`, { method: 'POST', body: { target_session_id: Number(t.dataset.target) } });
-          close();
-          toast(`C'est noté : ${fmtLong(r.session.date)} à ${r.session.start_time.replace(':', 'h')}`);
-          afterChange(after);
-        } catch (err) { t.disabled = false; toast(err.message, true); }
-      }
-    });
-    load();
-  });
-  return close;
 }
 
 // ---------- Vues membres ----------
@@ -468,10 +394,9 @@ function memberClicks(e, sessions, after, onFilter) {
 async function viewMyBookings() {
   loading();
   const data = await api(`/api/my/sessions?from=${addDays(today(), -90)}&to=${addDays(today(), 63)}`);
-  state.credits = data.credits; state.enrollments = data.enrollments;
+  state.enrollments = data.enrollments;
   const upcoming = data.sessions.filter((s) => !s.is_past);
   const past = data.sessions.filter((s) => s.is_past && !s.cancelled && s.my_status !== 'released').reverse();
-  const h = state.settings.cancel_deadline_hours;
   const row = (s) => `
     <div class="session ${s.cancelled ? 'cancelled' : ''} ${s.my_status === 'released' ? 'released' : ''}" style="--c:${esc(s.color)}">
       <div class="s-time">${fmt(s.date, { day: 'numeric' })}<small>${fmt(s.date, { month: 'short' })}</small></div>
@@ -482,53 +407,49 @@ async function viewMyBookings() {
       </div>
       <div class="s-action">${memberAction(s)}</div>
     </div>`;
-  const slots = state.enrollments.length
-    ? state.enrollments.map((e) => `<div class="list-item"><span class="dot" style="background:${esc(e.color)}"></span><div class="grow"><strong>${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} — ${esc(e.title)}</strong> ${e.status === 'pending' ? '<span class="badge warn">À valider</span>' : ''}<div class="small muted">${e.duration_min} min${e.location ? ` · ${esc(e.location)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div></div>`).join('')
-    : `<p class="muted">Vous n'avez pas encore de créneau à l'année.</p>${state.settings.allow_self_enroll ? '<a class="btn" href="#/mon-creneau">Choisir mon créneau</a>' : '<p class="small muted">Votre professeure vous inscrira sur votre créneau.</p>'}`;
+  const e = state.enrollments[0];
+  const slot = e
+    ? `<div class="list-item"><span class="dot" style="background:${esc(e.color)}"></span><div class="grow"><strong>${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} — ${esc(e.title)}</strong> ${e.status === 'pending' ? '<span class="badge warn">À valider</span>' : ''}<div class="small muted">${e.duration_min} min${e.location ? ` · ${esc(e.location)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div></div>`
+    : `<p class="muted">Pas encore de créneau. Indiquez vos préférences : votre professeure vous inscrira selon les places disponibles.</p><a class="btn small" href="#/mon-creneau">Mes préférences</a>`;
   $view.innerHTML = `
     <h1>Mes séances</h1>
     ${pendingHtml()}
-    <div class="grid2 my-top">
-      <div class="card"><h2>Mon créneau à l'année</h2>${slots}</div>
-      <div class="card credits-card"><h2>Mes rattrapages</h2>
-        <div class="credits"><span class="credits-n">${state.credits}</span><span>disponible${state.credits > 1 ? 's' : ''}</span></div>
-        <p class="small muted">Libérez votre place au moins ${h} h avant le cours pour gagner un rattrapage, puis réservez une place libre dans le planning.</p>
-        ${state.credits > 0 ? '<a class="btn small" href="#/planning">Trouver une place libre</a>' : ''}
-      </div>
-    </div>
+    <div class="card"><h2>Mon cours de la semaine</h2>${slot}
+      <p class="small muted" style="margin:12px 0 0">Un empêchement ? « Je ne viens pas » libère votre place et prévient les autres élèves. Le cours n’est pas rattrapé.</p></div>
     <h2 style="margin-top:8px">Prochaines séances</h2>
     ${upcoming.length ? upcoming.map(row).join('') : '<div class="empty"><div class="big"></div>Aucune séance à venir.</div>'}
     ${past.length ? `<h2 style="margin-top:28px">Historique</h2>${past.slice(0, 20).map(row).join('')}` : ''}
   `;
-  $view.onclick = (e) => memberClicks(e, data.sessions, viewMyBookings);
+  $view.onclick = (ev) => memberClicks(ev, data.sessions, viewMyBookings);
 }
 
-// Choisir son créneau à l'année
+// Préférences de créneau (1er, 2e, 3e choix)
 async function viewChooseSlot() {
   loading();
-  const { templates } = await api('/api/templates');
+  const [{ templates }, { preferences }] = await Promise.all([api('/api/templates'), api('/api/my/preferences')]);
+  const mine = state.enrollments[0];
+  const label = (t) => `${DAYS[t.weekday]} ${t.start_time.replace(':', 'h')} — ${t.title}`;
+  const select = (rank) => {
+    const cur = preferences.find((p) => p.rank === rank)?.template_id;
+    return `<div class="field"><label for="p${rank}">${rank === 1 ? '1er choix' : `${rank}e choix`}${rank > 1 ? ' <span class="muted">(facultatif)</span>' : ''}</label>
+      <select id="p${rank}" name="p${rank}"><option value="">—</option>${templates.map((t) => `<option value="${t.id}" ${t.id === cur ? 'selected' : ''}>${esc(label(t))}${t.free <= 0 ? ' (complet)' : ''}</option>`).join('')}</select></div>`;
+  };
   $view.innerHTML = `
-    <h1>Choisir mon créneau</h1>
-    <p class="muted">Votre place est réservée chaque semaine sur ce créneau, toute l'année (hors vacances). Si vous ne pouvez pas venir, vous libérez votre place et gagnez un rattrapage.</p>
-    ${templates.length ? templates.map((t) => `
-      <div class="session" style="--c:${esc(t.color)}">
-        <div class="s-time">${DAYS[t.weekday].slice(0, 3)}<small>${t.start_time.replace(':', 'h')}</small></div>
-        <div class="s-body"><div class="s-title">${esc(t.title)}</div>
-          <div class="s-meta"><span>${t.duration_min} min</span>${t.location ? `<span><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>${esc(t.location)}</span>` : ''}<span>${t.free > 0 ? plural(t.free, 'place') + ' à l’année' : 'Complet'}</span></div>
-          ${t.description ? `<div class="small muted">${esc(t.description)}</div>` : ''}</div>
-        <div class="s-action">${t.mine ? '<span class="badge ok">Mon créneau</span>' : t.free > 0 ? `<button class="btn small" data-enroll="${t.id}">Choisir</button>` : '<span class="badge plum">Complet</span>'}</div>
-      </div>`).join('') : '<div class="empty">Aucun créneau proposé pour le moment.</div>'}`;
-  $view.onclick = async (e) => {
-    const b = e.target.closest('[data-enroll]');
-    if (!b) return;
-    const t = templates.find((x) => String(x.id) === b.dataset.enroll);
-    if (!(await confirmBox(`Vous inscrire à l'année sur <strong>${esc(t.title)}</strong>, le ${DAYS[t.weekday].toLowerCase()} à ${t.start_time.replace(':', 'h')} ?`, 'Oui, je m’inscris'))) return;
-    try {
-      const r = await api(`/api/templates/${t.id}/enroll`, { method: 'POST' });
-      await refreshMe();
-      toast(`Inscription confirmée à partir du ${fmtLong(r.start_date)}`);
-      location.hash = '#/mes-reservations';
-    } catch (err) { toast(err.message, true); }
+    <h1>Mes préférences</h1>
+    ${mine ? `<div class="card"><p style="margin:0">Votre cours de la semaine : <strong>${DAYS[mine.weekday]} ${mine.start_time.replace(':', 'h')} — ${esc(mine.title)}</strong>${mine.status === 'pending' ? ' <span class="badge warn">À valider</span>' : ''}.</p>
+      <p class="small muted" style="margin:6px 0 0">Pour changer de créneau, indiquez vos nouvelles préférences et prévenez votre professeure.</p></div>` : ''}
+    <form class="card" id="f">
+      <p>Votre abonnement comprend <strong>un cours par semaine</strong>, toute l’année. Classez les créneaux qui vous conviennent : votre professeure vous inscrira selon vos préférences et les places disponibles, puis vous validerez.</p>
+      ${select(1)}${select(2)}${select(3)}
+      <div class="error" id="err"></div>
+      <button class="btn">Enregistrer mes préférences</button>
+    </form>`;
+  const f = $view.querySelector('#f');
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const ids = [1, 2, 3].map((r) => Number(f.querySelector(`#p${r}`).value)).filter(Boolean);
+    try { await api('/api/my/preferences', { method: 'PUT', body: { template_ids: ids } }); toast('Préférences enregistrées — votre professeure est prévenue'); f.querySelector('#err').textContent = ''; }
+    catch (err) { f.querySelector('#err').textContent = err.message; }
   };
 }
 
@@ -651,7 +572,7 @@ function viewProfile() {
 function adminNav(active) {
   const tabs = [
     ['#/admin', 'Semaine'], ['#/admin/annee', 'Année'], ['#/admin/cours', 'Cours réguliers'],
-    ['#/admin/fermetures', 'Vacances'], ['#/admin/appel', 'Appel'], ['#/admin/membres', 'Membres'], ['#/admin/reglages', 'Réglages'],
+    ['#/admin/repartition', 'Répartition'], ['#/admin/fermetures', 'Vacances'], ['#/admin/appel', 'Appel'], ['#/admin/membres', 'Membres'], ['#/admin/reglages', 'Réglages'],
   ];
   return `<div class="subnav">${tabs.map(([h, l]) => `<a href="${h}" class="chip ${h === active ? 'active' : ''}">${l}</a>`).join('')}</div>`;
 }
@@ -688,7 +609,7 @@ async function viewAdminSessions() {
 async function sessionDetailModal(id, after) {
   const [{ session: s, attendees, absent }, { users }] = await Promise.all([api(`/api/admin/sessions/${id}`), api('/api/admin/users')]);
   const others = users.filter((u) => u.active && !attendees.some((a) => a.id === u.id) && !absent.some((a) => a.id === u.id));
-  const kindBadge = { regular: '<span class="badge">À l’année</span>', makeup: '<span class="badge ok">Rattrapage</span>' };
+  const kindBadge = { regular: '<span class="badge">À l’année</span>', makeup: '<span class="badge ok">Place libre</span>' };
   const personRow = (a, btn) => `<div class="list-item"><div class="grow"><strong>${esc(a.name)}</strong> ${kindBadge[a.kind] || ''}<div class="small muted">${esc(a.email)}${a.phone ? ` · <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>` : ''}</div></div>${btn}</div>`;
   modal(`
     <div class="modal-head"><h2>${esc(s.title)}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
@@ -721,7 +642,7 @@ async function sessionDetailModal(id, after) {
       }
       const ab = e.target.closest('[data-absent]');
       if (ab) {
-        try { await api(`/api/admin/sessions/${id}/absences`, { method: 'POST', body: { user_id: Number(ab.dataset.absent) } }); toast('Absence notée, place libérée, rattrapage crédité'); reopen(); }
+        try { await api(`/api/admin/sessions/${id}/absences`, { method: 'POST', body: { user_id: Number(ab.dataset.absent) } }); toast('Absence notée — place libérée, les élèves sont prévenus'); reopen(); }
         catch (err) { toast(err.message, true); }
       }
       const pr = e.target.closest('[data-present]');
@@ -790,6 +711,57 @@ function editSessionModal(s, after, defaultDate) {
   });
 }
 
+// Répartition de l'année selon les préférences
+async function viewAssignments(proposal) {
+  loading();
+  const { templates, members } = await api('/api/admin/assignments');
+  const tName = (id) => { const t = templates.find((x) => x.id === id); return t ? `${DAYS[t.weekday].slice(0, 3)} ${t.start_time.replace(':', 'h')}` : '—'; };
+  const todo = members.filter((m) => !m.enrollment);
+  const done = members.filter((m) => m.enrollment);
+  const proposed = Object.fromEntries((proposal || []).map((p) => [p.user_id, p.template_id]));
+  const sorted = [...todo].sort((a, b) => (a.since ? 0 : 1) - (b.since ? 0 : 1) || (a.since || '').localeCompare(b.since || '') || a.name.localeCompare(b.name));
+  const row = (m) => {
+    const pick = proposed[m.id] ?? '';
+    const choice = m.prefs.indexOf(pick);
+    return `<div class="list-item">
+      <div class="grow"><strong>${esc(m.name)}</strong>
+        <div class="small muted">${m.prefs.length ? m.prefs.map((tid, i) => `${i + 1}. ${tName(tid)}`).join(' · ') : 'Pas de préférence indiquée'}${m.since ? ` · demande du ${new Date(m.since.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}` : ''}</div></div>
+      <div class="btn-row">
+        ${pick && choice >= 0 ? `<span class="badge ${choice === 0 ? 'ok' : 'warn'}">${choice === 0 ? '1er choix' : `${choice + 1}e choix`}</span>` : ''}
+        <select data-assign="${m.id}" style="width:auto;min-width:150px" aria-label="Créneau pour ${esc(m.name)}"><option value="">Ne pas inscrire</option>
+          ${templates.map((t) => `<option value="${t.id}" ${t.id === pick ? 'selected' : ''}>${tName(t.id)} (${t.capacity - t.enrolled} pl.)</option>`).join('')}</select>
+      </div></div>`;
+  };
+  $view.innerHTML = `
+    ${adminNav('#/admin/repartition')}
+    <h1>Répartition de l'année</h1>
+    <p class="muted small">Chaque abonné·e a un cours par semaine. Les élèves classent leurs créneaux préférés (Mes séances › Mes préférences). Proposez une répartition automatique — par ordre d'arrivée des demandes, 1er choix si possible, sinon 2e puis 3e — ajustez, puis inscrivez : chacun·e est prévenu·e et valide son créneau.</p>
+    <div class="filters" style="flex-wrap:wrap">${templates.map((t) => `<span class="chip" style="cursor:default">${tName(t.id)} · ${t.enrolled}/${t.capacity}</span>`).join('')}</div>
+    <div class="card">
+      <div class="section-title" style="margin-top:0"><h2>À inscrire (${todo.length})</h2>
+        <div class="btn-row"><button class="btn secondary small" id="auto">Proposer automatiquement</button><button class="btn small" id="apply" ${todo.length ? '' : 'disabled'}>Inscrire la sélection</button></div></div>
+      ${sorted.length ? sorted.map(row).join('') : '<p class="muted">Tout le monde a son créneau.</p>'}
+      ${proposal && proposal.some((p) => !p.template_id) ? '<p class="small" style="color:var(--warn)">Certaines personnes n’ont pas pu être placées : leurs créneaux préférés sont complets.</p>' : ''}
+    </div>
+    <details class="card"><summary><strong>Déjà inscrit·es (${done.length})</strong></summary>
+      ${done.map((m) => `<div class="list-item"><div class="grow">${esc(m.name)}</div><span class="small">${tName(m.enrollment.template_id)}</span> ${m.enrollment.status === 'pending' ? '<span class="badge warn">À valider</span>' : '<span class="badge ok">Validé</span>'}</div>`).join('') || '<p class="muted small">Personne.</p>'}
+    </details>`;
+  $view.querySelector('#auto').onclick = async () => {
+    try { const r = await api('/api/admin/assignments/propose', { method: 'POST' }); viewAssignments(r.proposals); toast(`${r.proposals.filter((p) => p.template_id).length} proposition(s)`); }
+    catch (err) { toast(err.message, true); }
+  };
+  $view.querySelector('#apply').onclick = async () => {
+    const assignments = [...$view.querySelectorAll('[data-assign]')].filter((sel) => sel.value).map((sel) => ({ user_id: Number(sel.dataset.assign), template_id: Number(sel.value) }));
+    if (!assignments.length) { toast('Choisissez au moins un créneau', true); return; }
+    if (!(await confirmBox(`Inscrire ${plural(assignments.length, 'personne')} ? Chacun·e reçoit une alerte et un e-mail pour valider son créneau.`, 'Inscrire'))) return;
+    try {
+      const r = await api('/api/admin/assignments/apply', { method: 'POST', body: { assignments } });
+      toast(r.errors.length ? `${r.done} inscrit·e(s) — ${r.errors.length} impossible(s) : ${r.errors.map((x) => x.name + ' (' + x.error + ')').join(', ')}` : `${r.done} inscrit·e(s), en attente de validation`, !!r.errors.length);
+      viewAssignments();
+    } catch (err) { toast(err.message, true); }
+  };
+}
+
 // Feuille d'appel imprimable d'une journée
 async function viewAttendance() {
   const p = hashParams();
@@ -802,7 +774,7 @@ async function viewAttendance() {
     if (next) { date = next.date; data = await api(`/api/admin/day?date=${date}`); }
   }
   setHashParams('#/admin/appel', { date });
-  const rows = (list) => list.map((a) => `<tr><td class="box"><span></span></td><td><strong>${esc(a.name)}</strong></td><td>${a.kind === 'makeup' ? 'Rattrapage' : 'À l’année'}</td><td class="nowrap">${a.phone ? esc(a.phone) : ''}</td><td class="sign"></td></tr>`).join('');
+  const rows = (list) => list.map((a) => `<tr><td class="box"><span></span></td><td><strong>${esc(a.name)}</strong></td><td>${a.kind === 'makeup' ? 'Place libre' : 'À l’année'}</td><td class="nowrap">${a.phone ? esc(a.phone) : ''}</td><td class="sign"></td></tr>`).join('');
   const blank = (n) => Array.from({ length: n }, () => '<tr class="blank"><td class="box"><span></span></td><td></td><td></td><td></td><td class="sign"></td></tr>').join('');
   const sheet = (x) => {
     const s = x.session;
@@ -948,7 +920,7 @@ async function viewAdminTemplates() {
 // Inscrit·es à l'année sur un créneau
 async function enrollmentsModal(t, after) {
   const [{ enrollments }, { users }] = await Promise.all([api(`/api/admin/templates/${t.id}/enrollments`), api('/api/admin/users')]);
-  const others = users.filter((u) => u.active && !enrollments.some((e) => e.user_id === u.id));
+  const others = users.filter((u) => u.active && u.role !== 'admin' && !u.slots.length); // un cours par semaine
   modal(`
     <div class="modal-head"><h2>${esc(t.title)}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <p>${DAYS[t.weekday]} ${t.start_time.replace(':', 'h')} · <span class="badge plum">${enrollments.length} / ${t.capacity} inscrit·es à l’année</span></p>
@@ -1128,7 +1100,7 @@ async function viewAdminUsers() {
       <div class="list-item">
         <div class="grow"><strong>${esc(u.name)}</strong> ${u.role === 'admin' ? '<span class="badge plum">Admin</span>' : ''} ${u.active ? '' : '<span class="badge danger">Désactivé</span>'}
           <div class="small muted">${esc(u.email)}${u.phone ? ` · <a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''} </div>
-          <div class="small">${u.slots.length ? u.slots.map(esc).join(' · ') : '<span class="muted">Pas de créneau à l’année</span>'} · <b>${plural(u.credits, 'rattrapage')}</b></div></div>
+          <div class="small">${u.slots.length ? u.slots.map(esc).join(' · ') : '<span class="muted">Pas de créneau à l’année</span>'}</div></div>
         <button class="btn secondary small" data-user="${u.id}">Détails</button>
       </div>`).join('') || '<p class="muted">Aucun résultat.</p>';
   };
@@ -1150,10 +1122,8 @@ async function viewAdminUsers() {
       <div class="modal-head"><h2>${esc(u.name)}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''}<br><span class="muted">Inscrit·e le ${new Date(u.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('fr-FR')}</span></p>
       <h3>Créneau à l'année</h3>
-      <p class="small">${u.slots.length ? u.slots.map(esc).join('<br>') : '<span class="muted">Aucun (inscription depuis « Cours réguliers »)</span>'}</p>
-      <h3>Rattrapages disponibles</h3>
-      <div class="btn-row" style="margin-bottom:12px"><button class="icon-btn" id="cminus" aria-label="Retirer un rattrapage">−</button><strong id="cval" style="font-size:1.3rem;min-width:40px;text-align:center">${u.credits}</strong><button class="icon-btn" id="cplus" aria-label="Ajouter un rattrapage">+</button><span class="small muted">(ex. séance offerte, carnet)</span></div>
-      <h3>Rattrapages réservés (${up.length})</h3>
+      <p class="small">${u.slots.length ? u.slots.map(esc).join('<br>') : '<span class="muted">Aucun (Gestion › Répartition ou Cours réguliers)</span>'}</p>
+      <h3>Places libres réservées (${up.length})</h3>
       ${up.length ? up.map((x) => `<div class="small">${x.cancelled ? '×' : '·'} ${fmtLong(x.date)} ${x.start_time.replace(':', 'h')} — ${esc(x.title)}</div>`).join('') : '<p class="small muted">Aucune.</p>'}
       <h3 style="margin-top:12px">Séances passées</h3><p class="small">${past.filter((x) => !x.cancelled).length} séance(s) suivie(s)</p>
       ${u.id !== state.user.id ? `<div class="btn-row" style="margin-top:16px">
@@ -1164,13 +1134,6 @@ async function viewAdminUsers() {
         try { await api(`/api/admin/users/${u.id}`, { method: 'PUT', body }); close(); toast('Membre mis à jour'); viewAdminUsers(); }
         catch (err) { toast(err.message, true); }
       };
-      const adj = async (delta) => {
-        try { const r = await api(`/api/admin/users/${u.id}/credits`, { method: 'POST', body: { delta } }); u.credits = r.credits; m.querySelector('#cval').textContent = r.credits; }
-        catch (err) { toast(err.message, true); }
-      };
-      m.querySelector('#cminus').onclick = () => adj(-1);
-      m.querySelector('#cplus').onclick = () => adj(1);
-      m.addEventListener('click', (ev) => { if (ev.target.closest('[data-close]')) viewAdminUsers(); });
       const r = m.querySelector('#role'); if (r) r.onclick = () => upd({ role: u.role === 'admin' ? 'member' : 'admin' });
       const a = m.querySelector('#act'); if (a) a.onclick = () => upd({ active: !u.active });
     });
@@ -1185,17 +1148,12 @@ async function viewAdminSettings() {
     <h1>Réglages</h1>
     <form class="card" id="f">
       <div class="field"><label>Nom affiché</label><input name="studio_name" value="${esc(s.studio_name)}"></div>
-      <div class="field"><label>Délai pour libérer sa place avec rattrapage (heures)</label><input type="number" min="0" name="cancel_deadline_hours" value="${esc(s.cancel_deadline_hours)}">
-        <p class="small muted">Ex. 12 : libérer sa place moins de 12 h avant ne donne pas de rattrapage, et un rattrapage ne peut plus être déplacé. 0 = toujours possible.</p></div>
+      <div class="field"><label>Délai minimum pour annuler une place réservée (heures)</label><input type="number" min="0" name="cancel_deadline_hours" value="${esc(s.cancel_deadline_hours)}">
+        <p class="small muted">Concerne les places libres prises ponctuellement. Libérer sa place habituelle (« Je ne viens pas ») reste possible jusqu'au début du cours. 0 = toujours possible.</p></div>
       <div class="field"><label>Ouverture des réservations (jours à l'avance)</label><input type="number" min="0" name="booking_horizon_days" value="${esc(s.booking_horizon_days)}">
         <p class="small muted">Ex. 120 : on peut réserver jusqu'à 4 mois à l'avance. 0 = sans limite (toute l'année).</p></div>
-      <div class="field"><label>Nombre maximum de rattrapages réservés à l'avance par personne</label><input type="number" min="0" name="max_active_bookings" value="${esc(s.max_active_bookings)}">
+      <div class="field"><label>Nombre maximum de places libres réservées à l'avance par personne</label><input type="number" min="0" name="max_active_bookings" value="${esc(s.max_active_bookings)}">
         <p class="small muted">0 = illimité.</p></div>
-      <h2>Créneaux à l'année</h2>
-      <div class="field"><label class="check"><input type="checkbox" name="allow_self_enroll" ${s.allow_self_enroll === '1' ? 'checked' : ''}>Les élèves choisissent eux-mêmes leur créneau à l'année</label>
-        <p class="small muted">Sinon, c'est vous qui les inscrivez depuis « Cours réguliers ».</p></div>
-      <div class="field"><label class="check"><input type="checkbox" name="makeup_requires_credit" ${s.makeup_requires_credit === '1' ? 'checked' : ''}>Une place libre ne se réserve qu'avec un rattrapage</label>
-        <p class="small muted">Un rattrapage s'obtient en libérant sa place à temps, ou quand vous annulez un cours. Décochez pour laisser réserver librement les places libres.</p></div>
       <button class="btn">Enregistrer</button>
     </form>`;
   const f = $view.querySelector('#f');
@@ -1211,7 +1169,6 @@ async function refreshMe() {
   const r = await api('/api/me');
   state.user = r.user;
   state.settings = r.settings;
-  state.credits = r.credits;
   state.enrollments = r.enrollments;
   state.unread = r.unread || 0;
   renderBell();

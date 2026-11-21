@@ -126,14 +126,8 @@ function createApp(db, opts = {}) {
     const link = `#/planning?semaine=${D.addDays(s.date, -((D.weekday(s.date) + 6) % 7))}`;
     const recipients = q("SELECT id FROM users WHERE active = 1 AND role = 'member' AND id != ?").all(byUserId)
       .map((r) => r.id).filter((id) => !statusOf(s, id).status);
-    const base = `Une place vient de se libérer pour le cours « ${s.title} » du ${when}${left > 1 ? ` (${left} places libres)` : ''}.`;
-    const needCredit = settings().makeup_requires_credit === '1';
-    const withCredit = needCredit ? recipients.filter((id) => creditsFor(id) > 0) : recipients;
-    const without = recipients.filter((id) => !withCredit.includes(id));
-    notify(withCredit, { kind: 'place', title: `Une place est libre ${when}`, link,
-      body: `${base} Le premier ou la première qui réserve la prend${needCredit ? ' (avec un de vos rattrapages)' : ''}.` });
-    notify(without, { kind: 'place', title: `Une place est libre ${when}`, link,
-      body: `${base} Pour la prendre, il faut un rattrapage : libérez d'abord votre place sur votre créneau habituel (« Je ne viens pas »), puis réservez celle-ci.` });
+    notify(recipients, { kind: 'place', title: `Une place est libre ${when}`, link,
+      body: `Une place vient de se libérer pour le cours « ${s.title} » du ${when}${left > 1 ? ` (${left} places libres)` : ''}. Le premier ou la première qui réserve la prend.` });
     const who = q('SELECT name FROM users WHERE id = ?').get(byUserId)?.name || 'Quelqu\'un';
     notify(adminIds().filter((id) => id !== byUserId), { kind: 'admin', title: `${who} libère sa place`, body: `${s.title}, ${when}.`, link: `#/admin?semaine=${link.split('=')[1]}` }, false);
   }
@@ -228,8 +222,12 @@ function createApp(db, opts = {}) {
     if (q('SELECT 1 FROM enrollments WHERE template_id = ? AND user_id = ? AND end_date IS NULL').get(t.id, userId)) {
       fail(409, 'Déjà inscrit·e sur ce créneau');
     }
+    // Un abonnement = un cours par semaine
+    const other = q(`SELECT t.weekday, t.start_time FROM enrollments e JOIN templates t ON t.id = e.template_id
+                     WHERE e.user_id = ? AND e.end_date IS NULL`).get(userId);
+    if (other) fail(409, `Un abonnement = un cours par semaine : déjà inscrit·e le ${DAY_NAMES[other.weekday]} à ${hhmm(other.start_time)}`);
     if (activeEnrolledCount(t.id) >= t.capacity) fail(409, 'Ce créneau est complet pour l\'année');
-    // Démarre après la dernière séance déjà pleine (rattrapages déjà réservés), pour ne pas surbooker
+    // Démarre après la dernière séance déjà pleine (places libres déjà réservées), pour ne pas surbooker
     let start = D.toISO(now()) > t.start_date ? D.toISO(now()) : t.start_date;
     const future = q(`${SESSION_SELECT} WHERE s.template_id = ? AND s.date >= ? AND s.cancelled = 0 ORDER BY s.date`).all(t.id, start);
     for (const s of future) if (occupiedOf(s) >= s.capacity) start = D.addDays(s.date, 1);
@@ -267,13 +265,6 @@ function createApp(db, opts = {}) {
     if (occupiedOf(s) >= s.capacity) fail(409, 'Cette séance est complète');
   }
 
-  // Un rattrapage consomme un crédit (si la règle est active)
-  function assertCredit(user, extra = 0) {
-    if (settings().makeup_requires_credit !== '1') return;
-    if (creditsFor(user.id) + extra <= 0) {
-      fail(409, 'Vous n\'avez pas de rattrapage disponible. Libérez d\'abord une place sur votre créneau.');
-    }
-  }
 
   function assertChangeable(s, isAdmin) {
     if (isAdmin) return;
@@ -411,6 +402,69 @@ function createApp(db, opts = {}) {
     return tx(db, () => enroll(t, user.id));
   }, 'user');
 
+  // ---------- Préférences & répartition de l'année ----------
+  const prefsOf = (userId) => q('SELECT rank, template_id, created_at FROM preferences WHERE user_id = ? ORDER BY rank').all(userId);
+
+  route('GET', '/api/my/preferences', async ({ user }) => ({ preferences: prefsOf(user.id) }), 'user');
+
+  route('PUT', '/api/my/preferences', async ({ user, body }) => {
+    const ids = Array.isArray(body.template_ids) ? body.template_ids.map(Number).filter(Boolean) : [];
+    if (!ids.length) fail(400, 'Choisissez au moins un créneau');
+    if (ids.length > 3 || new Set(ids).size !== ids.length) fail(400, 'Jusqu\'à 3 créneaux différents');
+    for (const id of ids) if (!q('SELECT 1 FROM templates WHERE id = ? AND active = 1').get(id)) fail(400, 'Créneau inconnu');
+    tx(db, () => {
+      // on garde la date de la première demande (ordre d'arrivée)
+      const since = q('SELECT MIN(created_at) c FROM preferences WHERE user_id = ?').get(user.id).c;
+      q('DELETE FROM preferences WHERE user_id = ?').run(user.id);
+      const ins = q("INSERT INTO preferences(user_id, rank, template_id, created_at) VALUES (?,?,?, COALESCE(?, datetime('now')))");
+      ids.forEach((id, i) => ins.run(user.id, i + 1, id, since));
+    });
+    if (!q('SELECT 1 FROM enrollments WHERE user_id = ? AND end_date IS NULL').get(user.id)) {
+      notify(adminIds(), { kind: 'admin', title: `${user.name} a indiqué ses préférences`, body: 'À répartir dans Gestion › Répartition.', link: '#/admin/repartition' }, false);
+    }
+    return { preferences: prefsOf(user.id) };
+  }, 'user');
+
+  function assignmentState() {
+    const templates = q('SELECT id, title, weekday, start_time, capacity FROM templates WHERE active = 1 ORDER BY weekday, start_time').all()
+      .map((t) => ({ ...t, enrolled: activeEnrolledCount(t.id) }));
+    const members = q("SELECT id, name, email, phone FROM users WHERE active = 1 AND role = 'member' ORDER BY name COLLATE NOCASE").all().map((u) => {
+      const e = q('SELECT template_id, status FROM enrollments WHERE user_id = ? AND end_date IS NULL').get(u.id);
+      const prefs = prefsOf(u.id);
+      return { ...u, enrollment: e || null, prefs: prefs.map((p) => p.template_id), since: prefs[0]?.created_at || null };
+    });
+    return { templates, members };
+  }
+  route('GET', '/api/admin/assignments', async () => assignmentState(), 'admin');
+
+  // Proposition automatique : par ordre d'arrivée des demandes, 1er choix si possible, sinon 2e, puis 3e
+  route('POST', '/api/admin/assignments/propose', async () => {
+    const { templates, members } = assignmentState();
+    const left = Object.fromEntries(templates.map((t) => [t.id, t.capacity - t.enrolled]));
+    const queue = members.filter((m) => !m.enrollment && m.prefs.length).sort((a, b) => a.since.localeCompare(b.since) || a.id - b.id);
+    const proposals = queue.map((m) => {
+      const i = m.prefs.findIndex((tid) => left[tid] > 0);
+      if (i < 0) return { user_id: m.id, template_id: null, choice: null };
+      left[m.prefs[i]]--;
+      return { user_id: m.id, template_id: m.prefs[i], choice: i + 1 };
+    });
+    return { proposals };
+  }, 'admin');
+
+  // Appliquer : inscriptions d'office (à valider par chaque élève, qui est prévenu)
+  route('POST', '/api/admin/assignments/apply', async ({ body }) => {
+    const list = Array.isArray(body.assignments) ? body.assignments : [];
+    const done = [], errors = [];
+    for (const a of list) {
+      const t = q('SELECT * FROM templates WHERE id = ?').get(Number(a.template_id));
+      const u = q('SELECT id, name FROM users WHERE id = ?').get(Number(a.user_id));
+      if (!t || !u) { errors.push({ user_id: a.user_id, error: 'Introuvable' }); continue; }
+      try { tx(db, () => enroll(t, u.id, 'pending')); done.push(u.id); }
+      catch (e) { errors.push({ user_id: u.id, name: u.name, error: e.message }); }
+    }
+    return { done: done.length, errors };
+  }, 'admin');
+
   // Valider ou refuser un créneau attribué d'office par la professeure
   function ownPendingEnrollment(id, user) {
     const e = q("SELECT e.*, t.title, t.weekday, t.start_time FROM enrollments e JOIN templates t ON t.id = e.template_id WHERE e.id = ? AND e.user_id = ? AND e.end_date IS NULL").get(id, user.id);
@@ -468,9 +522,6 @@ function createApp(db, opts = {}) {
       const a = absenceOf(s, user.id) || fail(404, 'Aucune place libérée sur cette séance');
       if (D.sessionStart(s.date, s.start_time) <= now()) fail(409, 'Cette séance est déjà passée');
       if (occupiedOf(s) >= s.capacity) fail(409, 'Votre place a été prise entre-temps. Choisissez un autre créneau.');
-      if (a.with_credit && settings().makeup_requires_credit === '1' && creditsFor(user.id) <= 0) {
-        fail(409, 'Le rattrapage obtenu a déjà été utilisé : annulez-le d\'abord');
-      }
       q('DELETE FROM absences WHERE id = ?').run(a.id);
       return { ok: true, credits: creditsFor(user.id) };
     });
@@ -499,7 +550,6 @@ function createApp(db, opts = {}) {
         q('DELETE FROM absences WHERE session_id = ? AND user_id = ?').run(t2.id, user.id);
       } else {
         assertBookable(t2, user);
-        assertCredit(user);
         assertQuota(user);
         q('INSERT INTO bookings(session_id, user_id) VALUES (?, ?)').run(t2.id, user.id);
       }
@@ -547,7 +597,6 @@ function createApp(db, opts = {}) {
       const s = getSession(params.id);
       if (statusOf(s, user.id).status === 'released') fail(409, 'C\'est votre créneau : utilisez « Je viens finalement »');
       assertBookable(s, user);
-      assertCredit(user);
       assertQuota(user);
       const r = q("INSERT INTO bookings(session_id, user_id) VALUES (?, ?)").run(s.id, user.id);
       return { booking_id: Number(r.lastInsertRowid), session: decorateSession(getSession(s.id), user), credits: creditsFor(user.id) };
@@ -848,7 +897,7 @@ function createApp(db, opts = {}) {
     if (body.notify !== false) {
       if (f.cancelled && !s.cancelled) {
         announce(beforeAll, 'cancel', `Séance annulée ${oldWhen}`,
-          `La séance « ${s.title} » du ${oldWhen} est annulée${reason ? ` : ${reason}` : ''}. Si c'était votre créneau, un rattrapage vous est offert.`, '#/mes-reservations');
+          `La séance « ${s.title} » du ${oldWhen} est annulée${reason ? ` : ${reason}` : ''}.`, '#/mes-reservations');
         notified = beforeAll.length;
       } else if (!f.cancelled && s.cancelled) {
         announce(beforeAll, 'restore', `Séance rétablie ${newWhen}`, `Bonne nouvelle : la séance « ${f.title} » du ${newWhen} est maintenue.`, weekLink(f.date));

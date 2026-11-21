@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS absences (
   UNIQUE (session_id, user_id)
 );
 
+-- Préférences de créneau (1er, 2e, 3e choix) pour la répartition de l'année
+CREATE TABLE IF NOT EXISTS preferences (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  rank        INTEGER NOT NULL CHECK (rank BETWEEN 1 AND 3),
+  template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, rank)
+);
+
 -- Alertes dans l'application (cloche)
 CREATE TABLE IF NOT EXISTS notifications (
   id         INTEGER PRIMARY KEY,
@@ -123,8 +132,8 @@ INSERT OR IGNORE INTO settings(key, value) VALUES
   ('booking_horizon_days', '120'),
   ('max_active_bookings', '0'),
   ('skip_public_holidays', '1'),
-  ('makeup_requires_credit', '1'),
-  ('allow_self_enroll', '1');
+  ('makeup_requires_credit', '0'),
+  ('allow_self_enroll', '0');
 `;
 
 function migrate(db) {
