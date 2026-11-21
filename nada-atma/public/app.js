@@ -98,6 +98,11 @@ const ICON = {
   login: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 3h3a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-3M10 17l5-5-5-5M15 12H3"/></svg>',
 };
 
+// Majuscule au début seulement : « Mardi 24 novembre 2026 »
+const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+// Heure lisible : 09:00 → 9h, 19:00 → 19h, 12:15 → 12h15
+const hm = (t) => String(t).replace(/^0(\d)/, '$1').replace(':', 'h').replace(/h00$/, 'h');
+
 // ---------- Navigation ----------
 function navItems() {
   const items = [{ href: '#/planning', label: 'Planning', icon: ICON.cal }];
@@ -192,7 +197,7 @@ function sessionCard(s, { admin = false } = {}) {
   const mine = !admin && (s.my_status === 'enrolled' || s.my_status === 'booked');
   const cls = ['session', s.cancelled && 'cancelled', mine && 'mine', s.my_status === 'released' && 'released', admin && 'clickable'].filter(Boolean).join(' ');
   return `<div class="${cls}" style="--c:${esc(s.color)}" ${admin ? `data-session="${s.id}"` : ''}>
-    <div class="s-time">${s.start_time.replace(':', 'h')}<small>${endTime(s.start_time, s.duration_min).replace(':', 'h')}</small></div>
+    <div class="s-time">${hm(s.start_time)}<small>${hm(endTime(s.start_time, s.duration_min))}</small></div>
     <div class="s-body">
       <div class="s-title">${esc(s.title)}</div>
       <div class="s-meta">${meta}</div>
@@ -226,7 +231,7 @@ function memberAction(s) {
 function pendingHtml() {
   const pend = state.enrollments.filter((e) => e.status === 'pending');
   return pend.map((e) => `<div class="pending-card">
-    <div><strong>Votre professeure vous a inscrit·e sur le créneau du ${DAYS[e.weekday].toLowerCase()} à ${e.start_time.replace(':', 'h')}</strong>
+    <div><strong>Votre professeure vous a inscrit·e sur le créneau du ${DAYS[e.weekday].toLowerCase()} à ${hm(e.start_time)}</strong>
     <div class="small">${esc(e.title)} · à partir du ${fmtLong(e.start_date)}. Votre place vous est gardée : merci de valider.</div></div>
     <div class="btn-row"><button class="btn small" data-accept="${e.id}">Valider</button><button class="btn ghost small" data-decline="${e.id}">Refuser</button></div>
   </div>`).join('');
@@ -246,7 +251,7 @@ function greetingHtml(sessions) {
   const first = esc(state.user.name.trim().split(/\s+/)[0]);
   const h = new Date().getHours();
   const next = sessions.find((s) => !s.is_past && !s.cancelled && (s.my_status === 'enrolled' || s.my_status === 'booked'));
-  const when = next ? `${fmt(next.date, { weekday: 'long', day: 'numeric', month: 'long' })} à ${next.start_time.replace(/^0/, '').replace(':', 'h').replace(/h00$/, 'h')}` : '';
+  const when = next ? `${fmt(next.date, { weekday: 'long', day: 'numeric', month: 'long' })} à ${hm(next.start_time)}` : '';
   return `<div class="greeting"><p class="hello">${h >= 18 ? 'Bonsoir' : 'Bonjour'} ${first}</p>
     <h1>Votre planning</h1>
     ${next ? `<p class="next">Prochain cours : <strong>${when}</strong></p>` : ''}</div>`;
@@ -260,7 +265,7 @@ function slotBanner() {
     return `<div class="slot-banner"><div><strong>Votre cours de la semaine</strong><div class="small">Votre professeure vous attribue votre créneau. En attendant, vous pouvez prendre une place libre.</div></div></div>`;
   }
   const e = state.enrollments[0];
-  return `<div class="slot-banner"><div><div class="small muted">Votre cours de la semaine</div><strong>${DAYS[e.weekday]} ${e.start_time.replace(/^0/, '').replace(':', 'h').replace(/h00$/, 'h')} · ${esc(e.title)}</strong>
+  return `<div class="slot-banner"><div><div class="small muted">Votre cours de la semaine</div><strong>${DAYS[e.weekday]} ${hm(e.start_time)} · ${esc(e.title)}</strong>
     <div class="small">Un empêchement ? « Je ne viens pas » libère votre place pour les autres.</div></div></div>`;
 }
 
@@ -302,7 +307,7 @@ async function book(sessionId, after) {
   if (!state.user) { toast('Connectez-vous pour réserver'); location.hash = '#/connexion'; return; }
   try {
     const r = await api(`/api/sessions/${sessionId}/book`, { method: 'POST' });
-    toast(`Réservé : ${r.session.title}, ${fmtLong(r.session.date)} à ${r.session.start_time.replace(':', 'h')}`);
+    toast(`Réservé : ${r.session.title}, ${fmtLong(r.session.date)} à ${hm(r.session.start_time)}`);
     afterChange(after);
   } catch (e) { toast(e.message, true); after && after(); }
 }
@@ -324,7 +329,7 @@ function deadlineInfo(s) {
 function manageSession(s, after) {
   const { late, hours } = deadlineInfo(s);
   const head = `<div class="modal-head"><h2>${esc(s.title)}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-    <p><strong style="text-transform:capitalize">${fmtFull(s.date)}</strong><br>${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}${s.location ? ` · ${esc(s.location)}` : ''}</p>`;
+    <p><strong>${cap(fmtFull(s.date))}</strong><br>${hm(s.start_time)} – ${hm(endTime(s.start_time, s.duration_min))}${s.location ? ` · ${esc(s.location)}` : ''}</p>`;
   if (s.my_status === 'enrolled') {
     modal(`${head}
       <p>Vous ne pouvez pas venir ? Libérez votre place : les autres élèves sont prévenus qu’une place est disponible.</p>
@@ -412,14 +417,14 @@ async function viewMyBookings() {
       <div class="s-time">${fmt(s.date, { day: 'numeric' })}<small>${fmt(s.date, { month: 'short' })}</small></div>
       <div class="s-body">
         <div class="s-title">${esc(s.title)}</div>
-        <div class="s-meta"><span style="text-transform:capitalize">${fmt(s.date, { weekday: 'long' })}</span><span>${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}</span></div>
+        <div class="s-meta"><span style="text-transform:capitalize">${fmt(s.date, { weekday: 'long' })}</span><span>${hm(s.start_time)} – ${hm(endTime(s.start_time, s.duration_min))}</span></div>
         ${s.cancelled && s.cancel_reason ? `<div class="small" style="color:var(--danger)">${esc(s.cancel_reason)}</div>` : ''}
       </div>
       <div class="s-action">${memberAction(s)}</div>
     </div>`;
   const e = state.enrollments[0];
   const slot = e
-    ? `<div class="list-item"><span class="dot" style="background:${esc(e.color)}"></span><div class="grow"><strong>${DAYS[e.weekday]} ${e.start_time.replace(':', 'h')} — ${esc(e.title)}</strong> ${e.status === 'pending' ? '<span class="badge warn">À valider</span>' : ''}<div class="small muted">${e.duration_min} min${e.location ? ` · ${esc(e.location)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div></div>`
+    ? `<div class="list-item"><span class="dot" style="background:${esc(e.color)}"></span><div class="grow"><strong>${DAYS[e.weekday]} ${hm(e.start_time)} — ${esc(e.title)}</strong> ${e.status === 'pending' ? '<span class="badge warn">À valider</span>' : ''}<div class="small muted">${e.duration_min} min${e.location ? ` · ${esc(e.location)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div></div>`
     : `<p class="muted">Pas encore de créneau. Indiquez vos préférences : votre professeure vous inscrira selon les places disponibles.</p><a class="btn small" href="#/mon-creneau">Mes préférences</a>`;
   $view.innerHTML = `
     <h1>Mes séances</h1>
@@ -438,7 +443,7 @@ async function viewChooseSlot() {
   loading();
   const [{ templates }, { preferences }] = await Promise.all([api('/api/templates'), api('/api/my/preferences')]);
   const mine = state.enrollments[0];
-  const label = (t) => `${DAYS[t.weekday]} ${t.start_time.replace(':', 'h')} — ${t.title}`;
+  const label = (t) => `${DAYS[t.weekday]} ${hm(t.start_time)} — ${t.title}`;
   const select = (rank) => {
     const cur = preferences.find((p) => p.rank === rank)?.template_id;
     return `<div class="field"><label for="p${rank}">${rank === 1 ? '1er choix' : `${rank}e choix`}${rank > 1 ? ' <span class="muted">(facultatif)</span>' : ''}</label>
@@ -446,7 +451,7 @@ async function viewChooseSlot() {
   };
   $view.innerHTML = `
     <h1>Mes préférences</h1>
-    ${mine ? `<div class="card"><p style="margin:0">Votre cours de la semaine : <strong>${DAYS[mine.weekday]} ${mine.start_time.replace(':', 'h')} — ${esc(mine.title)}</strong>${mine.status === 'pending' ? ' <span class="badge warn">À valider</span>' : ''}.</p>
+    ${mine ? `<div class="card"><p style="margin:0">Votre cours de la semaine : <strong>${DAYS[mine.weekday]} ${hm(mine.start_time)} — ${esc(mine.title)}</strong>${mine.status === 'pending' ? ' <span class="badge warn">À valider</span>' : ''}.</p>
       <p class="small muted" style="margin:6px 0 0">Pour changer de créneau, indiquez vos nouvelles préférences et prévenez votre professeure.</p></div>` : ''}
     <form class="card" id="f">
       <p>Votre abonnement comprend <strong>un cours par semaine</strong>, toute l’année. Classez les créneaux qui vous conviennent : votre professeure vous inscrira selon vos préférences et les places disponibles, puis vous validerez.</p>
@@ -622,8 +627,8 @@ async function sessionDetailModal(id, after) {
   const personRow = (a, btn) => `<div class="list-item"><div class="grow"><strong>${esc(a.name)}</strong> ${kindBadge[a.kind] || ''}<div class="small muted">${esc(a.email)}${a.phone ? ` · <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>` : ''}</div></div>${btn}</div>`;
   modal(`
     <div class="modal-head"><h2>${esc(s.title)}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-    <p><strong style="text-transform:capitalize">${fmtFull(s.date)}</strong><br>
-      ${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}${s.location ? ` · ${esc(s.location)}` : ''}<br>
+    <p><strong>${cap(fmtFull(s.date))}</strong><br>
+      ${hm(s.start_time)} – ${hm(endTime(s.start_time, s.duration_min))}${s.location ? ` · ${esc(s.location)}` : ''}<br>
       ${s.cancelled ? `<span class="badge danger">Annulée${s.cancel_reason ? ` : ${esc(s.cancel_reason)}` : ''}</span>` : `<span class="badge plum">${s.occupied} / ${s.capacity} inscrit·es</span>`}</p>
     <h3>Participant·es</h3>
     ${attendees.length ? attendees.map((a) => personRow(a, a.kind === 'makeup'
@@ -724,7 +729,7 @@ function editSessionModal(s, after, defaultDate) {
 async function viewAssignments(proposal) {
   loading();
   const { templates, members } = await api('/api/admin/assignments');
-  const tName = (id) => { const t = templates.find((x) => x.id === id); return t ? `${DAYS[t.weekday].slice(0, 3)} ${t.start_time.replace(':', 'h')}` : '—'; };
+  const tName = (id) => { const t = templates.find((x) => x.id === id); return t ? `${DAYS[t.weekday].slice(0, 3)} ${hm(t.start_time)}` : '—'; };
   const todo = members.filter((m) => !m.enrollment);
   const done = members.filter((m) => m.enrollment);
   const proposed = Object.fromEntries((proposal || []).map((p) => [p.user_id, p.template_id]));
@@ -789,7 +794,7 @@ async function viewAttendance() {
     const s = x.session;
     return `<section class="sheet">
       <div class="sheet-head">
-        <div><div class="sheet-time">${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}</div>
+        <div><div class="sheet-time">${hm(s.start_time)} – ${hm(endTime(s.start_time, s.duration_min))}</div>
           <div class="sheet-title">${esc(s.title)}${s.location ? ` · ${esc(s.location)}` : ''}</div></div>
         <div class="sheet-count">${s.cancelled ? '<span class="badge danger">Annulée</span>' : `${x.attendees.length} / ${s.capacity}`}</div>
       </div>
@@ -805,7 +810,7 @@ async function viewAttendance() {
     <div class="no-print">${adminNav('#/admin')}</div>
     <div class="week-head no-print">
       <button class="icon-btn" id="prev" aria-label="Jour précédent">${'<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>'}</button>
-      <h1 style="text-transform:capitalize">${fmtFull(date)}</h1>
+      <h1>${cap(fmtFull(date))}</h1>
       <button class="icon-btn" id="next" aria-label="Jour suivant">${'<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>'}</button>
       <input type="date" id="jump" value="${date}" style="width:auto" aria-label="Choisir la date">
       <button class="btn small" id="print" ${data.sessions.length ? '' : 'disabled'}><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/></svg>Imprimer</button>
@@ -813,7 +818,7 @@ async function viewAttendance() {
     <div class="print-page">
       <header class="print-head">
         <img src="/logo.png" alt="" class="print-logo">
-        <div><div class="print-brand">Nada Atma</div><div class="print-sub">Feuille d’appel — <span style="text-transform:capitalize">${fmtFull(date)}</span></div></div>
+        <div><div class="print-brand">Nada Atma</div><div class="print-sub">Feuille d’appel — <span>${cap(fmtFull(date))}</span></div></div>
       </header>
       ${data.sessions.length ? data.sessions.map(sheet).join('') : '<div class="empty"><div class="big"></div>Pas de cours ce jour-là.</div>'}
     </div>`;
@@ -893,7 +898,7 @@ async function viewAdminTemplates() {
         <span class="dot" style="background:${esc(t.color)}"></span>
         <div class="grow">
           <strong>${esc(t.title)}</strong> ${t.active ? '' : '<span class="badge">Inactif</span>'}
-          <div class="small muted">${DAYS[t.weekday]} ${t.start_time.replace(':', 'h')} · ${t.duration_min} min · ${t.capacity} places${t.location ? ` · ${esc(t.location)}` : ''}</div>
+          <div class="small muted">${DAYS[t.weekday]} ${hm(t.start_time)} · ${t.duration_min} min · ${t.capacity} places${t.location ? ` · ${esc(t.location)}` : ''}</div>
           <div class="small muted">Du ${fmtShort(t.start_date)} ${t.start_date.slice(0, 4)} au ${fmtShort(t.end_date)} ${t.end_date.slice(0, 4)} · ${plural(t.upcoming_sessions, 'séance')} à venir</div>
         </div>
         <div class="btn-row">
@@ -932,7 +937,7 @@ async function enrollmentsModal(t, after) {
   const others = users.filter((u) => u.active && u.role !== 'admin' && !u.slots.length); // un cours par semaine
   modal(`
     <div class="modal-head"><h2>${esc(t.title)}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-    <p>${DAYS[t.weekday]} ${t.start_time.replace(':', 'h')} · <span class="badge plum">${enrollments.length} / ${t.capacity} inscrit·es à l’année</span></p>
+    <p>${DAYS[t.weekday]} ${hm(t.start_time)} · <span class="badge plum">${enrollments.length} / ${t.capacity} inscrit·es à l’année</span></p>
     ${enrollments.length ? enrollments.map((e) => `<div class="list-item"><div class="grow"><strong>${esc(e.name)}</strong> ${e.status === 'pending' ? '<span class="badge warn">En attente de validation</span>' : '<span class="badge ok">Validé</span>'}<div class="small muted">${esc(e.email)}${e.phone ? ` · ${esc(e.phone)}` : ''} · depuis le ${fmtShort(e.start_date)}</div></div>
       <button class="btn ghost small" data-end="${e.id}">Retirer</button></div>`).join('') : '<p class="muted small">Personne pour le moment.</p>'}
     ${enrollments.length < t.capacity && others.length ? `<div class="btn-row" style="margin-top:14px">
@@ -1106,7 +1111,7 @@ function slotOptions(templates, current) {
   const opts = templates.filter((t) => t.active).map((t) => {
     const left = t.capacity - t.enrolled + (t.id === current ? 1 : 0);
     const full = left <= 0;
-    return `<option value="${t.id}" ${t.id === current ? 'selected' : ''} ${full ? 'disabled' : ''}>${DAYS[t.weekday]} ${t.start_time.replace(/^0/, '').replace(':', 'h').replace(/h00$/, 'h')} — ${full ? 'complet' : plural(left, 'place')}</option>`;
+    return `<option value="${t.id}" ${t.id === current ? 'selected' : ''} ${full ? 'disabled' : ''}>${DAYS[t.weekday]} ${hm(t.start_time)} — ${full ? 'complet' : plural(left, 'place')}</option>`;
   });
   return `<option value="">Pas de créneau pour l’instant</option>${opts.join('')}`;
 }

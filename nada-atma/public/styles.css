@@ -508,3 +508,6 @@ table.roll .sign { width: 28%; }
 .greeting h1 { margin: 2px 0 4px; }
 .greeting .next { margin: 0; font-size: .9rem; color: var(--muted); }
 .greeting .next strong { color: var(--ink); }
+.alert.unread .alert-ico { background: #fff; box-shadow: 0 2px 8px -3px rgba(74, 29, 56, .25); }
+.alert.unread { margin: 4px -10px; padding: 14px 12px 14px 20px; border-radius: 18px; border-bottom: 0; }
+.alert.unread::before { left: 7px; }
