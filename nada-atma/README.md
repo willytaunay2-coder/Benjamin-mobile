@@ -80,7 +80,14 @@ professeure, puis ajoutez les cours réguliers et les vacances, et partagez le l
 Sans clé d'envoi, les alertes restent visibles dans l'application et les e-mails et SMS sont seulement affichés dans la
 console du serveur. Chaque élève choisit dans son profil : SMS, e-mail, ou les deux.
 
-**SMS.** Avec Brevo, il suffit d'acheter des crédits SMS dans le compte Brevo : la même clé `BREVO_API_KEY` sert
+**Notifications sur le téléphone (gratuites).** Chaque élève touche « Activer les notifications » dans son profil :
+place libérée, cours déplacé, ajouté ou annulé s'affichent comme un SMS (écran verrouillé), sans aucun coût
+(Web Push, `lib/push.js`, sans dépendance). Sur iPhone (iOS 16.4 ou plus), il faut d'abord ajouter l'application à
+l'écran d'accueil depuis Safari. Les clés de sécurité (VAPID) sont créées toutes seules au premier lancement et
+gardées dans la base ; `PUSH_SUBJECT` (facultatif) = adresse de contact, ex. `mailto:contact@nada-atma.com`.
+Une place libre n'est signalée qu'aux élèves qui n'ont pas encore de cours cette semaine-là.
+
+**SMS (payants, facultatifs, désactivés par défaut).** Avec Brevo, il suffit d'acheter des crédits SMS dans le compte Brevo : la même clé `BREVO_API_KEY` sert
 aux e-mails et aux SMS (envoi « transactionnel » via `POST /v3/transactionalSMS/send`). Dans Gestion › Réglages,
 la professeure choisit : tout par SMS, seulement les changements de cours (les places libres restent par e-mail),
 ou jamais. Une place libérée envoie un SMS à chaque élève qui a un numéro : c'est le poste le plus coûteux.

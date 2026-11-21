@@ -591,3 +591,37 @@ table.roll .sign { width: 28%; }
 .sms-ok, .sms-off { padding: 10px 14px; border-radius: 14px; margin: 6px 0 0; }
 .sms-ok { background: var(--ok-soft); color: var(--ok); }
 .sms-off { background: var(--warn-soft); color: var(--warn); }
+
+/* ---------- Taux de remplissage (professeure) ---------- */
+.rate-card { display: flex; align-items: center; gap: 18px; padding: 16px 20px; margin: 0 0 16px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--sh-1); }
+.rate-num { white-space: nowrap; flex-shrink: 0; font-family: var(--font-title); font-weight: 700; font-size: 2.3rem; line-height: 1; color: var(--plum); font-variant-numeric: tabular-nums; }
+.rate-num small { font-size: 1rem; }
+.rate-card strong { display: block; font-size: .92rem; color: var(--ink); margin-bottom: 8px; }
+.rate-bar { height: 8px; border-radius: 99px; background: var(--plum-soft); overflow: hidden; margin-bottom: 6px; }
+.rate-bar i { display: block; height: 100%; border-radius: 99px; background: #c98aae; }
+.rate-bar.high i { background: #a85c88; }
+.rate-bar.full i { background: var(--grad-plum); }
+.spots.rate { font-variant-numeric: tabular-nums; }
+.spots.rate.full .spots-bar i { background: var(--grad-plum); }
+.day-rate { margin-left: 10px; padding: 2px 9px; border-radius: 999px; background: var(--plum-soft); color: var(--plum); font-size: .72rem; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+.mhead { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.mpct { font-size: .66rem; font-weight: 700; color: var(--plum); font-variant-numeric: tabular-nums; }
+.mpct.full { color: #6e2a52; }
+.week-rates { margin-top: 16px; }
+.week-rates h2 { margin-bottom: 6px; }
+.week-rate { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--ink); font-size: .9rem; }
+.week-rate:last-child { border-bottom: 0; }
+.week-rate:hover span:first-child { color: var(--plum); }
+@media (max-width: 640px) { .mpct { display: none; } .rate-num { font-size: 1.9rem; } }
+
+/* ---------- Notifications sur le téléphone ---------- */
+.push-card h2 { display: flex; align-items: center; gap: 8px; }
+.push-card h2 .i { width: 20px; height: 20px; color: var(--plum); }
+.push-card p { margin: 0 0 10px; }
+.push-state.on { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-weight: 700; font-size: .85rem; }
+.push-state.on::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.install-steps { margin: 0 0 12px; padding-left: 1.3em; display: grid; gap: 6px; font-size: .9rem; }
+.push-invite { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 16px; margin: 0 0 18px; border-radius: var(--radius); background: #fff; border: 1px solid var(--line); box-shadow: var(--sh-1); }
+.push-invite > .i { width: 22px; height: 22px; color: var(--plum); flex-shrink: 0; }
+.push-invite .grow { flex: 1 1 180px; min-width: 0; }
+.push-invite strong { color: var(--ink); }

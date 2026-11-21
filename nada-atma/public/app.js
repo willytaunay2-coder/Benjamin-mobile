@@ -104,11 +104,82 @@ const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 // Heure lisible : 09:00 → 9h, 19:00 → 19h, 12:15 → 12h15
 const hm = (t) => String(t).replace(/^0(\d)/, '$1').replace(':', 'h').replace(/h00$/, 'h');
 
+// ---------- Notifications sur le téléphone (gratuites) ----------
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isInstalled = () => window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+const b64uBytes = (s) => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+async function pushSubscription() {
+  const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((r) => setTimeout(() => r(null), 3000))]);
+  return reg ? { reg, sub: await reg.pushManager.getSubscription() } : null;
+}
+// 'on' | 'off' | 'ios-install' | 'denied' | 'unsupported' | 'demo'
+async function pushStatus() {
+  if (window.NADA_DEMO) return 'demo';
+  if (!pushSupported()) return isIOS() && !isInstalled() ? 'ios-install' : 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  const r = await pushSubscription();
+  if (!r) return 'unsupported';
+  return r.sub ? 'on' : 'off';
+}
+async function enablePush() {
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('Notifications refusées. Vous pouvez les autoriser dans les réglages du téléphone.');
+  const { publicKey } = await api('/api/push/key');
+  const r = await pushSubscription();
+  if (!r) throw new Error('Ce téléphone ne permet pas les notifications ici.');
+  const sub = r.sub || await r.reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(publicKey) });
+  await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+}
+async function disablePush() {
+  const r = await pushSubscription();
+  if (r && r.sub) { await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: r.sub.endpoint } }); await r.sub.unsubscribe(); }
+}
+const IOS_STEPS = `<ol class="install-steps"><li>Ouvrez ce site dans <strong>Safari</strong>.</li><li>Touchez <strong>Partager</strong>, puis <strong>« Sur l’écran d’accueil »</strong>.</li><li>Ouvrez Nada Atma depuis la nouvelle icône, puis revenez ici.</li></ol>`;
+// Bloc « Notifications sur ce téléphone » (profil)
+async function renderPushCard(el) {
+  const st = await pushStatus();
+  const texts = {
+    on: '<p class="push-state on">Activées sur ce téléphone.</p><p class="small muted">Vous êtes prévenu·e dès qu’une place se libère ou qu’un cours change, comme par SMS, gratuitement.</p>',
+    off: '<p class="small">Recevez une notification sur ce téléphone, comme un SMS, dès qu’une place se libère ou qu’un cours change. C’est gratuit.</p>',
+    'ios-install': `<p class="small">Sur iPhone, les notifications fonctionnent une fois l’application installée :</p>${IOS_STEPS}`,
+    denied: '<p class="small">Les notifications sont bloquées pour ce site. Autorisez-les dans les réglages du téléphone, puis revenez ici.</p>',
+    unsupported: '<p class="small muted">Ce navigateur ne permet pas les notifications. Les alertes restent visibles dans l’application (la cloche) et par e-mail.</p>',
+    demo: '<p class="push-state on">Activées (démo).</p><p class="small muted">Dans la démo, les notifications sont simulées : elles arrivent dans « Messages », en haut de l’écran.</p>',
+  };
+  el.innerHTML = `<h2><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>Notifications sur ce téléphone</h2>${texts[st]}
+    <div class="btn-row">${st === 'off' ? '<button type="button" class="btn" id="push-on">Activer les notifications</button>' : ''}
+    ${st === 'on' ? '<button type="button" class="btn secondary small" id="push-test">Envoyer un essai</button><button type="button" class="btn ghost small" id="push-off">Désactiver</button>' : ''}</div>`;
+  const on = el.querySelector('#push-on'), off = el.querySelector('#push-off'), test = el.querySelector('#push-test');
+  if (on) on.onclick = async () => { on.disabled = true; try { await enablePush(); toast('Notifications activées'); } catch (e) { toast(e.message, true); } renderPushCard(el); };
+  if (off) off.onclick = async () => { try { await disablePush(); toast('Notifications désactivées'); } catch (e) { toast(e.message, true); } renderPushCard(el); };
+  if (test) test.onclick = async () => { try { await api('/api/push/test', { method: 'POST' }); toast('Essai envoyé : la notification arrive dans quelques secondes'); } catch (e) { toast(e.message, true); } };
+}
+// Invitation discrète sur le planning des élèves
+async function renderPushInvite(el) {
+  let dismissed = false;
+  try { dismissed = localStorage.getItem('na-push-invite') === 'non'; } catch { /* stockage indisponible */ }
+  if (dismissed || !state.user || isAdmin()) return;
+  const st = await pushStatus();
+  if (st !== 'off' && st !== 'ios-install') return;
+  el.innerHTML = `<div class="push-invite"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><div class="grow"><strong>Soyez prévenu·e en premier</strong>
+    <div class="small">${st === 'off' ? 'Une notification sur votre téléphone dès qu’une place se libère. Gratuit.' : 'Installez l’application sur votre iPhone pour recevoir les notifications.'}</div></div>
+    ${st === 'off' ? '<button class="btn small" id="invite-on">Activer</button>' : '<a class="btn small" href="#/profil">Comment faire</a>'}
+    <button class="icon-btn" id="invite-x" aria-label="Ne plus proposer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
+  const on = el.querySelector('#invite-on');
+  if (on) on.onclick = async () => { try { await enablePush(); toast('Notifications activées'); el.innerHTML = ''; } catch (e) { toast(e.message, true); } };
+  el.querySelector('#invite-x').onclick = () => { try { localStorage.setItem('na-push-invite', 'non'); } catch { /* */ } el.innerHTML = ''; };
+}
+
 // ---------- Navigation ----------
 function navItems() {
   const items = [{ href: '#/planning', label: 'Planning', icon: ICON.cal }];
   if (state.user) {
-    if (isAdmin()) items.push({ href: '#/admin', label: 'Gestion', icon: ICON.admin });
+    if (isAdmin()) {
+      // La professeure ne s'inscrit pas aux cours : son menu mène à ses plannings et à la gestion
+      return [{ href: '#/admin', label: 'Planning', icon: ICON.cal }, { href: '#/admin/membres', label: 'Élèves', icon: ICON.mine },
+        { href: '#/admin/cours', label: 'Cours', icon: ICON.admin }, { href: '#/profil', label: 'Profil', icon: ICON.user }];
+    }
     items.push({ href: '#/profil', label: 'Profil', icon: ICON.user });
   } else {
     items.push({ href: '#/connexion', label: 'Connexion', icon: ICON.login });
@@ -128,7 +199,8 @@ function renderBell() {
 function renderNav() {
   renderBell();
   const cur = location.hash.split('?')[0] || '#/planning';
-  const active = (h) => cur === h || (h !== '#/planning' && cur.startsWith(h));
+  const planViews = ['#/admin', '#/admin/jour', '#/admin/mois', '#/admin/annee', '#/admin/appel'];
+  const active = (h) => cur === h || (h === '#/admin' ? planViews.includes(cur) : h !== '#/planning' && cur.startsWith(h));
   const items = navItems();
   document.getElementById('topnav').innerHTML = items.map((i) => `<a href="${i.href}" class="${active(i.href) ? 'active' : ''}">${i.label}</a>`).join('');
   document.getElementById('tabbar').innerHTML = items.map((i) => `<a href="${i.href}" class="${active(i.href) ? 'active' : ''}">${i.icon}<span>${i.label}</span></a>`).join('');
@@ -171,12 +243,26 @@ async function router() {
   const needUser = ['#/mes-reservations', '#/profil', '#/mon-creneau', '#/alertes'].includes(path) || path.startsWith('#/admin');
   if (needUser && !state.user) { location.hash = '#/connexion'; return; }
   if (path.startsWith('#/admin') && !isAdmin()) { location.hash = '#/planning'; return; }
+  if (isAdmin() && ['#/planning', '#/mes-reservations', '#/mon-creneau'].includes(path)) { location.hash = '#/admin'; return; }
   const fn = ROUTES[path] || viewPlanning;
   try { await fn(); } catch (e) { $view.innerHTML = `<div class="card error">${esc(e.message)}</div>`; }
   window.scrollTo(0, 0);
 }
 
 // ---------- Composants séance ----------
+// Taux de remplissage (professeure)
+const pctOf = (occ, cap) => (cap ? Math.round((occ / cap) * 100) : 0);
+function rateHtml(occ, cap) {
+  const pct = pctOf(occ, cap);
+  return `<span class="spots rate ${fillLevel(occ, cap)}"><span class="spots-bar"><i style="width:${Math.min(100, pct)}%"></i></span>${occ}/${cap} · ${pct} %</span>`;
+}
+function rateCard(occ, cap, label, sub = '', detail = '') {
+  const pct = pctOf(occ, cap);
+  return `<div class="rate-card"><div class="rate-num">${pct}<small> %</small></div><div class="grow"><strong>${label}</strong>
+    <div class="rate-bar ${fillLevel(occ, cap)}"><i style="width:${Math.min(100, pct)}%"></i></div>
+    <div class="small muted">${detail || `${occ} place${occ > 1 ? 's' : ''} occupée${occ > 1 ? 's' : ''} sur ${cap}${sub ? ` · ${sub}` : ''}`}</div></div></div>`;
+}
+
 function spotsHtml(s) {
   const pct = Math.min(100, Math.round((s.occupied / s.capacity) * 100));
   return `<span class="spots"><span class="spots-bar"><i style="width:${pct}%"></i></span>${s.spots_left > 0 ? plural(s.spots_left, 'place') : 'Complet'}</span>`;
@@ -186,7 +272,7 @@ function sessionCard(s, { admin = false } = {}) {
   const meta = [
     `${s.duration_min} min`,
     s.location && `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>${esc(s.location)}`,
-    admin ? `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.8c2 .7 3.2 2.5 3.6 5.2"/></svg>${s.occupied}/${s.capacity}${s.absent_count ? ` · ${s.absent_count} absent${s.absent_count > 1 ? 's' : ''}` : ''}` : (!s.cancelled && !s.is_past ? spotsHtml(s) : ''),
+    admin ? (s.cancelled ? '' : `${rateHtml(s.occupied, s.capacity)}${s.absent_count ? ` · ${s.absent_count} annulation${s.absent_count > 1 ? 's' : ''}` : ''}`) : (!s.cancelled && !s.is_past ? spotsHtml(s) : ''),
   ].filter(Boolean).map((m) => `<span>${m}</span>`).join('');
 
   let action = '';
@@ -286,8 +372,10 @@ function weekHtml(from, data, { admin = false } = {}) {
     const closure = data.closures.find((c) => c.start_date <= d && c.end_date >= d);
     // côté élèves, les séances annulées par une fermeture sont remplacées par le bandeau
     const list = (byDay[d] || []).filter((s) => admin || !(s.cancelled && s.closure_id && !s.my_status));
-    if (!list.length && !closure && !admin) continue; // élèves : on n'affiche que les jours de cours
-    html += `<section class="day"><h3 class="day-title ${d === today() ? 'today' : ''}">${fmtLong(d)}${admin && list.length ? `<a class="print-link" href="#/admin/appel?date=${d}" aria-label="Imprimer la feuille d’appel du ${fmtLong(d)}"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/></svg>Appel</a>` : ''}</h3>`;
+    if (!list.length && !closure) continue; // on n'affiche que les jours de cours (ou de fermeture)
+    const dayOn = list.filter((s) => !s.cancelled);
+    const dayRate = admin && dayOn.length ? `<span class="day-rate">${pctOf(dayOn.reduce((a, s) => a + s.occupied, 0), dayOn.reduce((a, s) => a + s.capacity, 0))} %</span>` : '';
+    html += `<section class="day"><h3 class="day-title ${d === today() ? 'today' : ''}">${fmtLong(d)}${dayRate}${admin && list.length ? `<a class="print-link" href="#/admin/appel?date=${d}" aria-label="Imprimer la feuille d’appel du ${fmtLong(d)}"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/></svg>Appel</a>` : ''}</h3>`;
     if (closure) html += `<div class="closure-banner"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z"/><path d="M5 19l7-7"/></svg><span><strong>${esc(closure.label)}</strong> — pas de cours</span></div>`;
     if (list.length) html += list.map((s) => sessionCard(s, { admin })).join('');
     else if (!closure) html += '<div class="day-empty">Pas de séance</div>';
@@ -392,7 +480,7 @@ async function viewPlanning() {
   state.takenWeeks = new Set(data.sessions.filter((x) => !x.cancelled && (x.my_status === 'enrolled' || x.my_status === 'booked')).map((x) => mondayOf(x.date)));
   $view.innerHTML = `
     ${!state.user ? `<div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p>
-      <p class="muted">Consultez le planning et <a href="#/inscription">créez votre compte</a> pour choisir votre créneau.</p></div>` : greetingHtml(data.sessions) + slotBanner()}
+      <p class="muted">Consultez le planning et <a href="#/inscription">créez votre compte</a> pour choisir votre créneau.</p></div>` : greetingHtml(data.sessions) + slotBanner() + '<div id="push-invite"></div>'}
     <div class="week-head">
       <button class="icon-btn" id="prev" aria-label="Semaine précédente"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
       <h1>${fmt(from, { day: 'numeric', month: 'short' })} – ${fmt(to, { day: 'numeric', month: 'short', year: 'numeric' })}</h1>
@@ -404,6 +492,7 @@ async function viewPlanning() {
     ${weekHtml(from, data)}
     ${!data.sessions.length && !data.closures.length ? '<div class="empty"><div class="big"></div>Aucune séance cette semaine.</div>' : ''}
   `;
+  const inv = $view.querySelector('#push-invite'); if (inv) renderPushInvite(inv);
   const go = (d) => { location.hash = `#/planning?semaine=${mondayOf(d)}`; };
   $view.querySelector('#prev').onclick = () => go(addDays(from, -7));
   $view.querySelector('#next').onclick = () => go(addDays(from, 7));
@@ -570,15 +659,16 @@ function viewProfile() {
   const u = state.user;
   $view.innerHTML = `
     <h1>Mon profil</h1>
+    <section class="card push-card" id="push-card"></section>
     <form class="card" id="f">
       <div class="field"><label>E-mail</label><input value="${esc(u.email)}" disabled></div>
       <div class="grid2">
         <div class="field"><label for="name">Nom</label><input id="name" name="name" value="${esc(u.name)}" required></div>
         <div class="field"><label for="phone">Téléphone</label><input id="phone" name="phone" type="tel" value="${esc(u.phone)}"></div>
       </div>
-      <fieldset class="field notify-set"><legend>Être prévenu·e (places libres, cours déplacés ou ajoutés)</legend>
-        <label class="check"><input type="checkbox" name="notify_sms" ${u.notify_sms !== false ? 'checked' : ''}>Par SMS, au numéro ci-dessus</label>
+      <fieldset class="field notify-set"><legend>Être prévenu·e aussi (places libres, cours déplacés ou ajoutés)</legend>
         <label class="check"><input type="checkbox" name="notify_email" ${u.notify_email !== false ? 'checked' : ''}>Par e-mail</label>
+        ${state.settings.sms_enabled ? `<label class="check"><input type="checkbox" name="notify_sms" ${u.notify_sms !== false ? 'checked' : ''}>Par SMS, au numéro ci-dessus</label>` : ''}
         <p class="small muted">Les alertes restent toujours visibles dans l’application (la cloche).</p>
       </fieldset>
       <h3>Changer de mot de passe</h3>
@@ -591,6 +681,7 @@ function viewProfile() {
     </form>
     <button class="btn danger" id="logout">Se déconnecter</button>
     <div class="install-tip"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M11 18h2"/></svg><div><strong>Installer l'application</strong> : sur iPhone, ouvrez ce site dans Safari, touchez « Partager » puis « Sur l'écran d'accueil ». Sur Android, menu ⋮ puis « Installer l'application ».</div></div>`;
+  renderPushCard($view.querySelector('#push-card'));
   const f = $view.querySelector('#f');
   f.onsubmit = async (e) => {
     e.preventDefault();
@@ -628,7 +719,8 @@ async function viewAdminSessions() {
     data = await api(`/api/sessions?from=${from}&to=${addDays(from, 6)}`);
   }
   setHashParams('#/admin', { semaine: p.semaine ? from : '' });
-  const total = data.sessions.filter((s) => !s.cancelled).reduce((a, s) => a + s.occupied, 0);
+  const weekOn = data.sessions.filter((s) => !s.cancelled);
+  const total = weekOn.reduce((a, s) => a + s.occupied, 0), weekCap = weekOn.reduce((a, s) => a + s.capacity, 0);
   $view.innerHTML = `
     ${adminNav('#/admin')}
     ${planNav('#/admin')}
@@ -639,8 +731,9 @@ async function viewAdminSessions() {
       <button class="btn secondary small" id="now">Aujourd'hui</button>
       <button class="btn small" id="add">+ Ajouter une séance</button>
     </div>
-    <p class="muted small">${plural(data.sessions.filter((s) => !s.cancelled).length, 'séance')} · ${plural(total, 'place')} occupées cette semaine. Touchez une séance pour voir les inscrit·es.</p>
-    ${weekHtml(from, data, { admin: true })}`;
+    ${weekOn.length ? rateCard(total, weekCap, 'Remplissage de la semaine', plural(weekOn.length, 'séance')) : ''}
+    <p class="muted small">Touchez une séance pour voir les inscrit·es, la modifier ou la déplacer.</p>
+    ${weekHtml(from, data, { admin: true }) || '<div class="empty card"><div class="big"></div>Pas de cours cette semaine.</div>'}`;
   const go = (d) => { location.hash = `#/admin?semaine=${mondayOf(d)}`; };
   $view.querySelector('#prev').onclick = () => go(addDays(from, -7));
   $view.querySelector('#next').onclick = () => go(addDays(from, 7));
@@ -942,6 +1035,12 @@ async function viewAdminMonth() {
   const closedDay = (d) => data.closures.find((c) => c.start_date <= d && c.end_date >= d);
   const active = data.sessions.filter((s) => !s.cancelled);
   const seats = active.reduce((a, s) => a + s.capacity, 0), taken = active.reduce((a, s) => a + s.occupied, 0);
+  const weeks = [];
+  for (const x of active) {
+    const mon = mondayOf(x.date); let w = weeks.find((k) => k.mon === mon);
+    if (!w) weeks.push(w = { mon, occ: 0, cap: 0 });
+    w.occ += x.occupied; w.cap += x.capacity;
+  }
   let cells = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map((d) => `<div class="mdow">${d}</div>`).join('');
   for (let d = mondayOf(first); d <= addDays(mondayOf(last), 6); d = addDays(d, 1)) {
     const inMonth = d.slice(0, 7) === month;
@@ -950,8 +1049,10 @@ async function viewAdminMonth() {
     const chips = list.map((s) => s.cancelled
       ? `<button class="mchip cancelled" data-session="${s.id}" aria-label="${hm(s.start_time)}, séance annulée"><span class="t">${hm(s.start_time)}</span><span class="n">annulée</span></button>`
       : `<button class="mchip ${fillLevel(s.occupied, s.capacity)}" data-session="${s.id}" aria-label="${hm(s.start_time)} : ${s.occupied} inscrit·es sur ${s.capacity}"><span class="t">${hm(s.start_time)}</span><span class="n">${s.occupied}/${s.capacity}</span></button>`).join('');
+    const on = list.filter((x) => !x.cancelled);
+    const dayPct = on.length ? `<span class="mpct ${fillLevel(on.reduce((a, x) => a + x.occupied, 0), on.reduce((a, x) => a + x.capacity, 0))}">${pctOf(on.reduce((a, x) => a + x.occupied, 0), on.reduce((a, x) => a + x.capacity, 0))} %</span>` : '';
     cells += `<div class="mcell ${inMonth ? '' : 'out'} ${c && !list.length ? 'closed' : ''} ${d === today() ? 'today' : ''}">
-      <button class="mday" data-day="${d}" aria-label="Voir le ${fmtLong(d)}">${Number(d.slice(8))}</button>
+      <div class="mhead"><button class="mday" data-day="${d}" aria-label="Voir le ${fmtLong(d)}">${Number(d.slice(8))}</button>${inMonth ? dayPct : ''}</div>
       ${chips}${c && !list.length && inMonth && (d === c.start_date || d === first || D_isMonday(d)) ? `<span class="mclosed">${esc(c.label)}</span>` : ''}
     </div>`;
   }
@@ -965,9 +1066,11 @@ async function viewAdminMonth() {
       <button class="icon-btn" id="next" aria-label="Mois suivant">${ARROW_R}</button>
       <button class="btn secondary small" id="now">Ce mois-ci</button>
     </div>
-    <p class="muted small">${plural(active.length, 'séance')} · ${plural(taken, 'place')} occupée${taken > 1 ? 's' : ''} sur ${seats}${seats ? ` (${Math.round(taken / seats * 100)} %)` : ''}. Touchez un cours pour le détail, ou un numéro de jour pour la journée.</p>
-    <div class="legend"><span class="l-open">Places libres</span><span class="l-high">Presque complet</span><span class="l-full">Complet</span></div>
-    <div class="mgrid">${cells}</div>`;
+    ${active.length ? rateCard(taken, seats, 'Remplissage du mois', plural(active.length, 'séance')) : ''}
+    <div class="legend"><span class="l-open">Places libres</span><span class="l-high">Presque complet (75 % et plus)</span><span class="l-full">Complet</span></div>
+    <div class="mgrid">${cells}</div>
+    ${weeks.length ? `<div class="card week-rates"><h2>Par semaine</h2>${weeks.map((w) => `<a class="week-rate" href="#/admin?semaine=${w.mon}"><span>Semaine du ${fmt(w.mon, { day: 'numeric', month: 'long' })}</span>${rateHtml(w.occ, w.cap)}</a>`).join('')}</div>` : ''}
+    <p class="muted small">Touchez un cours pour le détail, un numéro de jour pour la journée, une semaine pour la vue semaine.</p>`;
   const shift = (n) => { const dt = new Date(y, mo - 1 + n, 1, 12); location.hash = `#/admin/mois?mois=${dt.getFullYear()}-${pad(dt.getMonth() + 1)}`; };
   $view.querySelector('#prev').onclick = () => shift(-1);
   $view.querySelector('#next').onclick = () => shift(1);
@@ -1370,20 +1473,27 @@ async function viewAdminUsers() {
 
 async function viewAdminSettings() {
   loading();
-  const [{ settings: s, sms_ready: smsReady }, { users }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/users')]);
+  const [{ settings: s, sms_ready: smsReady, push_users: pushUsers }, { users }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/users')]);
   const reach = users.filter((u) => u.active && u.role === 'member' && u.notify_sms !== false && u.phone.replace(/\D/g, '').length >= 9).length;
-  const mode = s.sms_mode || 'all';
+  const mode = s.sms_mode || 'off';
+  const members = users.filter((u) => u.active && u.role === 'member').length;
   const opt = (v, title, desc) => `<label class="radio-card ${mode === v ? 'on' : ''}"><input type="radio" name="sms_mode" value="${v}" ${mode === v ? 'checked' : ''}><span><strong>${title}</strong><span class="small muted">${desc}</span></span></label>`;
   $view.innerHTML = `
     ${adminNav('#/admin/reglages')}
     <h1>Réglages</h1>
+    <section class="card">
+      <h2>Notifications gratuites</h2>
+      <p class="small">Chaque élève active les notifications sur son téléphone (Profil › « Activer les notifications »). Elles s’affichent comme un SMS : place libérée, cours déplacé, ajouté ou annulé. Sur iPhone, il faut d’abord ajouter l’application à l’écran d’accueil.</p>
+      ${rateCard(pushUsers, members || 1, 'Élèves qui les ont activées', '', `${pushUsers} élève${pushUsers > 1 ? 's' : ''} sur ${members}`)}
+      <p class="small muted">Les e-mails partent aussi, gratuitement, pour celles et ceux qui les acceptent.</p>
+    </section>
     <form class="card" id="f">
-      <h2>Alertes par SMS</h2>
+      <h2>SMS (payants, facultatifs)</h2>
       <p class="small ${smsReady ? 'sms-ok' : 'sms-off'}">${smsReady ? 'Les SMS sont branchés : ils partent au nom « NadaAtma ».' : 'Les SMS ne sont pas encore branchés : il faut ajouter la clé Brevo au serveur (voir le guide). En attendant, seuls les e-mails et les alertes de l’application partent.'}</p>
       <div class="radio-cards" role="radiogroup" aria-label="Quand envoyer un SMS">
         ${opt('all', 'Tout par SMS', 'Places libres, cours déplacés, ajoutés ou annulés, identifiants des nouveaux comptes.')}
         ${opt('changes', 'Changements de cours seulement', 'Cours déplacés, ajoutés ou annulés et identifiants. Les places libres restent par e-mail et dans l’application.')}
-        ${opt('off', 'Jamais', 'Uniquement e-mails et alertes dans l’application.')}
+        ${opt('off', 'Jamais (conseillé)', 'Notifications gratuites, e-mails et alertes dans l’application suffisent.')}
       </div>
       <p class="small muted">${reach} élève${reach > 1 ? 's' : ''} recevr${reach > 1 ? 'aient' : 'ait'} les SMS (numéro renseigné, SMS acceptés). Une place libérée envoie un SMS à chacun·e : chaque SMS est facturé par Brevo, quelques centimes.</p>
       <h2 style="margin-top:22px">Général</h2>

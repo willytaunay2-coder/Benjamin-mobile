@@ -1,6 +1,7 @@
 'use strict';
 process.env.TZ = 'Europe/Paris';
 process.env.MAIL_SILENT = '1';
+process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -379,6 +380,9 @@ test('un cours par semaine : pas de deuxième inscription la même semaine', asy
   assert.match(r.data.error, /Un cours par semaine : vous êtes déjà inscrit·e le mardi 8 septembre à 19h/);
   // Elle annule mardi : elle peut prendre jeudi
   assert.equal((await alice('POST', `/api/sessions/${tue.id}/release`)).status, 200);
+  // Bob a déjà son cours jeudi cette semaine : inutile de le prévenir ; Eve, sans cours, l'est
+  assert.ok(!(await bob('GET', '/api/notifications')).data.notifications.some((n) => /Une place est libre mardi 8/.test(n.title)));
+  assert.ok((await eve('GET', '/api/notifications')).data.notifications.some((n) => /Une place est libre mardi 8/.test(n.title)));
   assert.equal((await alice('POST', `/api/sessions/${thu.id}/book`)).status, 200);
   // …mais ne peut plus reprendre mardi tant qu'elle est inscrite jeudi
   r = await alice('POST', `/api/sessions/${tue.id}/unrelease`);
@@ -391,6 +395,11 @@ test('un cours par semaine : pas de deuxième inscription la même semaine', asy
   // La semaine suivante, c'est de nouveau possible
   const thu2 = (await admin('GET', '/api/sessions?from=2026-09-17&to=2026-09-17')).data.sessions[0];
   assert.equal((await eve('POST', `/api/sessions/${thu2.id}/book`)).status, 200);
+
+  // La professeure ne s'inscrit pas elle-même aux cours
+  r = await admin('POST', `/api/sessions/${thu2.id}/book`);
+  assert.equal(r.status, 403);
+  assert.match(r.data.error, /La professeure ne s’inscrit pas aux cours/);
 
   // La professeure peut faire une exception
   const bobId = (await bob('GET', '/api/me')).data.user.id;
@@ -409,6 +418,8 @@ test('alertes par SMS : places libres, changements, préférence de chaque élè
   t.after(() => server.close());
   const admin = client(), alice = client(), bob = client(), carol = client();
   await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  assert.equal((await admin('GET', '/api/admin/settings')).data.settings.sms_mode, 'off'); // payant : désactivé par défaut
+  await admin('PUT', '/api/admin/settings', { sms_mode: 'all' });
   const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2026-12-31' })).data.template;
   const make = async (c, name, phone, slot) => {
     const r = await admin('POST', '/api/admin/users', { name, email: `${name.toLowerCase()}@example.com`, phone, template_id: slot });
@@ -451,4 +462,80 @@ test('alertes par SMS : places libres, changements, préférence de chaque élè
   assert.equal(sms.sent.length, 0);
   // Réglage « jamais »
   assert.equal((await admin('GET', '/api/admin/settings')).data.settings.sms_mode, 'all');
+});
+
+// Déchiffrement côté téléphone (RFC 8291), écrit à part pour vérifier ce que le serveur envoie
+const nodeCrypto = require('node:crypto');
+function decryptPush(buf, ua, authSecret) {
+  const hmac = (k, d) => nodeCrypto.createHmac('sha256', k).update(d).digest();
+  const salt = buf.subarray(0, 16), idlen = buf[20], keyid = buf.subarray(21, 21 + idlen), data = buf.subarray(21 + idlen);
+  const ikm = hmac(hmac(authSecret, ua.computeSecret(keyid)), Buffer.concat([Buffer.from('WebPush: info\0'), ua.getPublicKey(), keyid, Buffer.from([1])]));
+  const prk = hmac(salt, ikm);
+  const cek = hmac(prk, Buffer.concat([Buffer.from('Content-Encoding: aes128gcm\0'), Buffer.from([1])])).subarray(0, 16);
+  const nonce = hmac(prk, Buffer.concat([Buffer.from('Content-Encoding: nonce\0'), Buffer.from([1])])).subarray(0, 12);
+  const d = nodeCrypto.createDecipheriv('aes-128-gcm', cek, nonce);
+  d.setAuthTag(data.subarray(data.length - 16));
+  const plain = Buffer.concat([d.update(data.subarray(0, data.length - 16)), d.final()]);
+  assert.equal(plain[plain.length - 1], 2); // dernier bloc
+  return JSON.parse(plain.subarray(0, plain.length - 1).toString());
+}
+
+test('notifications sur le téléphone (Web Push) : chiffrées, signées, gratuites', async (t) => {
+  NOW = new Date(2026, 8, 4, 10, 0);
+  // Faux service de notifications (celui d'Apple ou de Google en vrai)
+  const received = []; let answer = 201;
+  const pushSrv = http.createServer((req, res) => {
+    const chunks = []; req.on('data', (c) => chunks.push(c));
+    req.on('end', () => { received.push({ url: req.url, headers: req.headers, body: Buffer.concat(chunks) }); res.writeHead(answer); res.end(); });
+  });
+  await new Promise((r) => pushSrv.listen(0, r));
+  t.after(() => pushSrv.close());
+  const pushBase = `http://127.0.0.1:${pushSrv.address().port}`;
+
+  const { server, client } = await start();
+  t.after(() => server.close());
+  const admin = client(), alice = client(), bob = client();
+  await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 2, start_date: '2026-09-01', end_date: '2026-12-31' })).data.template;
+  for (const [c, name, slot] of [[alice, 'Alice', mar.id], [bob, 'Bob', null]]) {
+    const r = await admin('POST', '/api/admin/users', { name, email: `${name.toLowerCase()}@example.com`, template_id: slot, send_email: false });
+    await c('POST', '/api/login', { email: `${name.toLowerCase()}@example.com`, password: r.data.temp_password });
+  }
+  // Le téléphone de Bob s'abonne
+  const { publicKey } = (await bob('GET', '/api/push/key')).data;
+  assert.equal(Buffer.from(publicKey, 'base64url').length, 65);
+  const ua = nodeCrypto.createECDH('prime256v1'); ua.generateKeys();
+  const auth = nodeCrypto.randomBytes(16);
+  const sub = { endpoint: `${pushBase}/bob-phone`, keys: { p256dh: ua.getPublicKey().toString('base64url'), auth: auth.toString('base64url') } };
+  assert.equal((await bob('POST', '/api/push/subscribe', sub)).status, 200);
+  assert.equal((await bob('POST', '/api/push/subscribe', { ...sub, endpoint: 'ftp://x' })).status, 400);
+
+  // Alice annule : le téléphone de Bob reçoit la notification
+  const tue = (await admin('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0];
+  await alice('POST', `/api/sessions/${tue.id}/release`);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(received.length, 1);
+  const got = received[0];
+  assert.equal(got.url, '/bob-phone');
+  assert.equal(got.headers['content-encoding'], 'aes128gcm');
+  assert.ok(Number(got.headers.ttl) > 0);
+  const msg = decryptPush(got.body, ua, auth);
+  assert.equal(msg.title, 'Une place est libre mardi 8 septembre à 19h');
+  assert.match(msg.url, /^\/#\/planning\?semaine=2026-09-07$/);
+  // Signature VAPID valide, pour ce service
+  const [, jwt, k] = /^vapid t=([^,]+), k=(.+)$/.exec(got.headers.authorization);
+  assert.equal(k, publicKey);
+  const [h, c, sig] = jwt.split('.');
+  assert.equal(JSON.parse(Buffer.from(c, 'base64url')).aud, pushBase);
+  const raw = Buffer.from(k, 'base64url');
+  const pub = nodeCrypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: raw.subarray(1, 33).toString('base64url'), y: raw.subarray(33).toString('base64url') }, format: 'jwk' });
+  assert.ok(nodeCrypto.verify('sha256', Buffer.from(`${h}.${c}`), { key: pub, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig, 'base64url')));
+
+  // Téléphone désinstallé (réponse 410) : l'abonnement est supprimé
+  answer = 410;
+  assert.equal((await bob('POST', '/api/push/test')).data.devices, 1);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal((await bob('POST', '/api/push/test')).data.devices, 0);
+  // La clé privée n'est jamais exposée dans les réglages
+  assert.ok(!JSON.stringify((await admin('GET', '/api/admin/settings')).data).includes('vapid'));
 });

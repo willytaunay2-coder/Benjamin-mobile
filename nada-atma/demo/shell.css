@@ -81,3 +81,9 @@
 .demo-kind { display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px; background: #e7f3ed; color: #2f7356; font: 700 10px 'Josefin Sans', sans-serif; letter-spacing: .1em; text-transform: uppercase; }
 .demo-kind.mail { background: #f6edf2; color: #8e3b6b; }
 .demo-mail summary .demo-mail-t { order: -1; }
+.demo-push { border-top: 1px solid rgba(91, 66, 80, .12); padding: 14px 0; display: flex; flex-direction: column; gap: 8px; }
+.demo-notif { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 20px; background: rgba(236, 233, 240, .95); box-shadow: 0 6px 18px -10px rgba(46, 31, 42, .35); font: 13.5px/1.4 -apple-system, system-ui, sans-serif; color: #1d1d1f; }
+.demo-notif img { width: 34px; height: 34px; border-radius: 9px; background: #fff; padding: 3px; flex-shrink: 0; }
+.demo-notif div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.demo-notif-app { font-size: 11px; letter-spacing: .06em; color: #6e6e73; }
+.demo-kind.push { background: #ede9f6; color: #5a4a8a; }

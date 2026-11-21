@@ -92,6 +92,16 @@
     if (name === 'node:fs') return {};
     if (name === 'node:sqlite') return { DatabaseSync };
     if (name === './mailer') return mailerModule;
+    if (name === './push') {
+      // Pas de vrai envoi dans la démo : la notification arrive dans « Messages »
+      return {
+        createVapidKeys: () => ({ publicKey: 'demo', jwk: {} }),
+        createPush() {
+          return { sent: [], publicKey: () => 'demo', async send() {},
+            sendLater(list) { for (const { sub, message } of list) DEMO.outbox.push({ kind: 'push', to: sub.endpoint, title: message.title, body: message.body, at: Date.now() }); saveSoon(); } };
+        },
+      };
+    }
     if (name === './sms') {
       // Le vrai module (format des numéros, alphabet SMS), avec un envoi simulé dans la boîte de démo
       const real = loadModule('./sms');
@@ -153,7 +163,7 @@
   }
 
   // ---------- Sauvegarde dans le navigateur ----------
-  const KEY = 'nada-atma-demo-v3';
+  const KEY = 'nada-atma-demo-v4';
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
   function save() {
@@ -215,6 +225,14 @@
     const katia = await api('POST', '/api/admin/users', { name: 'Katia Picquet', email: 'katia.picquet@exemple.fr', phone: '06 12 34 56 78', template_id: T.ma19.id });
     DEMO.katiaPassword = katia.temp_password;
     DEMO.cookie = ''; await api('POST', '/api/login', { email: 'katia.picquet@exemple.fr', password: katia.temp_password }); DEMO.tokens.katia = DEMO.cookie;
+
+    // Notifications activées sur le téléphone de Katia, de la professeure et d'environ deux élèves sur trois
+    const addSub = DEMO.db.prepare("INSERT INTO push_subscriptions(user_id, endpoint, p256dh, auth) VALUES (?, ?, 'demo', 'demo')");
+    for (const u of DEMO.db.prepare("SELECT id, email, role FROM users").all()) {
+      if (u.email === 'katia.picquet@exemple.fr') addSub.run(u.id, 'demo://katia');
+      else if (u.role === 'admin') addSub.run(u.id, 'demo://prof');
+      else if (u.id % 3) addSub.run(u.id, 'demo://eleve-' + u.id);
+    }
 
     // Une semaine vivante : des places libérées, une prise
     DEMO.cookie = DEMO.tokens.prof;

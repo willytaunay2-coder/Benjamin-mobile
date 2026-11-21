@@ -122,6 +122,17 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS ix_notifications_user ON notifications(user_id, id);
 
+-- Notifications sur le téléphone (Web Push) : un abonnement par appareil
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         INTEGER PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint   TEXT NOT NULL UNIQUE,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_push_user ON push_subscriptions(user_id);
+
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -134,7 +145,7 @@ INSERT OR IGNORE INTO settings(key, value) VALUES
   ('skip_public_holidays', '1'),
   ('makeup_requires_credit', '0'),
   ('allow_self_enroll', '0'),
-  ('sms_mode', 'all');
+  ('sms_mode', 'off');
 `;
 
 function migrate(db) {

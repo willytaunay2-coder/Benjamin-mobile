@@ -6,6 +6,7 @@ const { tx } = require('./db');
 const D = require('./dates');
 const { createMailer } = require('./mailer');
 const { createSms, toInternational } = require('./sms');
+const { createPush, createVapidKeys } = require('./push');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const TOKEN_TTL_MS = 60 * 24 * 3600 * 1000; // 60 jours
@@ -85,8 +86,23 @@ function createApp(db, opts = {}) {
   const appUrl = (opts.appUrl || process.env.APP_URL || '').replace(/\/$/, '');
 
   const q = (sql) => db.prepare(sql);
-  const settings = () => Object.fromEntries(q('SELECT key, value FROM settings').all().map((r) => [r.key, r.value]));
+  const settings = () => Object.fromEntries(q("SELECT key, value FROM settings WHERE key NOT LIKE 'vapid%'").all().map((r) => [r.key, r.value]));
   const settingNum = (k) => Number(settings()[k] || 0);
+  // Clés VAPID des notifications : créées une fois, gardées dans la base
+  let vapid = null;
+  const vapidKeys = () => {
+    if (vapid) return vapid;
+    const row = q("SELECT value FROM settings WHERE key = 'vapid_keys'").get();
+    if (row) return (vapid = JSON.parse(row.value));
+    vapid = createVapidKeys();
+    q("INSERT OR REPLACE INTO settings(key, value) VALUES ('vapid_keys', ?)").run(JSON.stringify(vapid));
+    return vapid;
+  };
+  const push = opts.push || createPush({
+    keys: vapidKeys,
+    subject: process.env.PUSH_SUBJECT || (appUrl.startsWith('https://') ? appUrl : 'mailto:contact@nada-atma.com'),
+    onGone: (endpoint) => q('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint),
+  });
 
   function publicUser(u) {
     return u && { id: u.id, email: u.email, name: u.name, phone: u.phone, role: u.role, active: !!u.active, created_at: u.created_at, notify_email: u.notify_email !== 0, notify_sms: u.notify_sms !== 0 };
@@ -102,7 +118,8 @@ function createApp(db, opts = {}) {
   // userIds : destinataires ; email : envoyer aussi un e-mail (si la personne l'accepte)
   function notify(userIds, { kind, title, body = '', link = '' }, email = true) {
     const ins = q('INSERT INTO notifications(user_id, kind, title, body, link) VALUES (?,?,?,?,?)');
-    const mails = [], texts = [];
+    const mails = [], texts = [], pushes = [];
+    const subsOf = q('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?');
     const st = settings();
     const studio = st.studio_name || 'Nada Atma';
     // SMS : toutes les alertes, seulement les changements de cours (pas les places libres), ou jamais
@@ -112,6 +129,8 @@ function createApp(db, opts = {}) {
     const smsText = kind === 'place' ? `${studio} : ${title}. Inscrivez-vous dans l'appli${url}` : `${studio} : ${title}.${url}`;
     for (const id of new Set(userIds)) {
       ins.run(id, kind, title, body, link);
+      // Notification sur le téléphone (gratuite) pour chaque appareil où la personne l'a activée
+      for (const sub of subsOf.all(id)) pushes.push({ sub, message: { title, body: body.length > 180 ? body.slice(0, 177) + '…' : body, url: '/' + link, tag: `${kind}:${title}` } });
       if (!email) continue;
       const u = q('SELECT email, name, phone, notify_email, notify_sms, active FROM users WHERE id = ?').get(id);
       if (!u || !u.active) continue;
@@ -125,6 +144,7 @@ function createApp(db, opts = {}) {
     }
     mailer.sendLater(mails);
     sms.sendLater(texts);
+    push.sendLater(pushes);
   }
   const adminIds = () => q("SELECT id FROM users WHERE role = 'admin' AND active = 1").all().map((r) => r.id);
 
@@ -137,7 +157,8 @@ function createApp(db, opts = {}) {
     const when = `${longDate(s.date)} à ${hhmm(s.start_time)}`;
     const link = `#/planning?semaine=${D.addDays(s.date, -((D.weekday(s.date) + 6) % 7))}`;
     const recipients = q("SELECT id FROM users WHERE active = 1 AND role = 'member' AND id != ?").all(byUserId)
-      .map((r) => r.id).filter((id) => !statusOf(s, id).status);
+      .map((r) => r.id).filter((id) => !statusOf(s, id).status)
+      .filter((id) => !courseInWeek(id, s.date)); // un cours par semaine : inutile de prévenir qui a déjà le sien
     notify(recipients, { kind: 'place', title: `Une place est libre ${when}`, link,
       body: `Une place vient de se libérer pour le cours « ${s.title} » du ${when}${left > 1 ? ` (${left} places libres)` : ''}. Le premier ou la première qui s’inscrit l’obtient.` });
     const who = q('SELECT name FROM users WHERE id = ?').get(byUserId)?.name || 'Quelqu\'un';
@@ -231,6 +252,7 @@ function createApp(db, opts = {}) {
     q('SELECT COUNT(*) n FROM enrollments WHERE template_id = ? AND end_date IS NULL').get(templateId).n;
 
   function enroll(t, userId, status = 'confirmed') {
+    if (q('SELECT role FROM users WHERE id = ?').get(userId)?.role === 'admin') fail(403, 'La professeure ne s’inscrit pas aux cours');
     if (q('SELECT 1 FROM enrollments WHERE template_id = ? AND user_id = ? AND end_date IS NULL').get(t.id, userId)) {
       fail(409, 'Déjà inscrit·e sur ce créneau');
     }
@@ -278,6 +300,7 @@ function createApp(db, opts = {}) {
   const weekLimitMsg = (x) => `Un cours par semaine : vous êtes déjà inscrit·e le ${longDate(x.date)} à ${hhmm(x.start_time)}. Pour changer, annulez d'abord ce cours.`;
 
   function assertBookable(s, user, { ignoreHorizon = false, ignoreWeekLimit = false } = {}) {
+    if (user.role === 'admin') fail(403, 'La professeure ne s’inscrit pas aux cours');
     if (s.cancelled) fail(409, 'Cette séance est annulée');
     const start = D.sessionStart(s.date, s.start_time);
     if (start <= now()) fail(409, 'Cette séance est déjà passée');
@@ -409,6 +432,7 @@ function createApp(db, opts = {}) {
         max_active_bookings: Number(st.max_active_bookings),
         makeup_requires_credit: st.makeup_requires_credit === '1',
         allow_self_enroll: st.allow_self_enroll === '1',
+        sms_enabled: (st.sms_mode || 'off') !== 'off',
       },
     };
   });
@@ -604,6 +628,26 @@ function createApp(db, opts = {}) {
       q('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(String(body.new_password)), user.id);
     }
     return { user: publicUser(q('SELECT * FROM users WHERE id = ?').get(user.id)) };
+  }, 'user');
+
+  // ---------- Notifications sur le téléphone ----------
+  route('GET', '/api/push/key', async () => ({ publicKey: vapidKeys().publicKey }), 'user');
+  route('POST', '/api/push/subscribe', async ({ user, body }) => {
+    const endpoint = str(body.endpoint, 1000), p256dh = str(body.keys && body.keys.p256dh, 200), auth = str(body.keys && body.keys.auth, 100);
+    if (!/^https:\/\//.test(endpoint) && !(process.env.NODE_ENV === 'test' && /^http:\/\/127\.0\.0\.1/.test(endpoint))) fail(400, 'Abonnement invalide');
+    if (!p256dh || !auth) fail(400, 'Abonnement invalide');
+    q(`INSERT INTO push_subscriptions(user_id, endpoint, p256dh, auth) VALUES (?,?,?,?)
+       ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`).run(user.id, endpoint, p256dh, auth);
+    return { ok: true };
+  }, 'user');
+  route('POST', '/api/push/unsubscribe', async ({ user, body }) => {
+    q('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?').run(str(body.endpoint, 1000), user.id);
+    return { ok: true };
+  }, 'user');
+  route('POST', '/api/push/test', async ({ user }) => {
+    const subs = q('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(user.id);
+    push.sendLater(subs.map((sub) => ({ sub, message: { title: 'Les notifications fonctionnent', body: 'Vous serez prévenu·e ici dès qu’une place se libère ou qu’un cours change.', url: '/#/planning', tag: 'test' } })));
+    return { devices: subs.length };
   }, 'user');
 
   // Planning public (visible même sans compte)
@@ -1069,7 +1113,10 @@ function createApp(db, opts = {}) {
   }), 'admin');
 
   // Réglages
-  route('GET', '/api/admin/settings', async () => ({ settings: settings(), sms_ready: !!sms.live }), 'admin');
+  route('GET', '/api/admin/settings', async () => ({
+    settings: settings(), sms_ready: !!sms.live,
+    push_users: q("SELECT COUNT(DISTINCT p.user_id) n FROM push_subscriptions p JOIN users u ON u.id = p.user_id WHERE u.active = 1 AND u.role = 'member'").get().n,
+  }), 'admin');
   route('PUT', '/api/admin/settings', async ({ body }) => {
     const up = q('UPDATE settings SET value = ? WHERE key = ?');
     if (body.studio_name !== undefined) up.run(str(body.studio_name, 100) || 'Nada Atma', 'studio_name');
