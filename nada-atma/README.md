@@ -37,7 +37,10 @@ Une séance annulée par la professeure donne aussi un rattrapage ; pas les vaca
 - **Vacances & fermetures** (import des vacances scolaires zone A/B/C, jours fériés sautés)
 - **Vue annuelle** et **vue semaine** ; détail d'une séance : inscrits à l'année, rattrapages, places libérées ;
   noter une absence, rendre une place, annuler une séance (rattrapage offert aux inscrits)
-- **Séances ponctuelles** (ateliers, stages)
+- **Déplacer une séance** (date, heure) ou **ajouter une séance** : tous les élèves sont prévenus (alerte + e-mail) ;
+  les inscrit·es d'une séance annulée ou rétablie aussi
+- **Feuille d'appel** imprimable pour chaque journée (bouton « Appel » sur chaque jour, ou onglet Gestion › Appel) :
+  une ligne par élève avec case « Présent », lignes vides pour les imprévus, liste des places libérées
 - **Membres** : créneau, nombre de rattrapages, ajout/retrait manuel de rattrapages
 - **Réglages** : délai pour libérer sa place avec rattrapage, ouverture des réservations, choix du créneau par
   les élèves eux-mêmes ou non, rattrapage obligatoire ou non pour prendre une place libre

@@ -153,6 +153,7 @@ const ROUTES = {
   '#/admin/fermetures': viewAdminClosures,
   '#/admin/membres': viewAdminUsers,
   '#/admin/reglages': viewAdminSettings,
+  '#/admin/appel': viewAttendance,
 };
 
 async function router() {
@@ -275,7 +276,7 @@ function weekHtml(from, data, { admin = false } = {}) {
     // côté élèves, les séances annulées par une fermeture sont remplacées par le bandeau
     const list = (byDay[d] || []).filter((s) => admin || !(s.cancelled && s.closure_id && !s.my_status));
     if (!list.length && !closure && !admin) continue; // élèves : on n'affiche que les jours de cours
-    html += `<section class="day"><h3 class="day-title ${d === today() ? 'today' : ''}">${fmtLong(d)}</h3>`;
+    html += `<section class="day"><h3 class="day-title ${d === today() ? 'today' : ''}">${fmtLong(d)}${admin && list.length ? `<a class="print-link" href="#/admin/appel?date=${d}" aria-label="Imprimer la feuille d’appel du ${fmtLong(d)}"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/></svg>Appel</a>` : ''}</h3>`;
     if (closure) html += `<div class="closure-banner"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z"/><path d="M5 19l7-7"/></svg><span><strong>${esc(closure.label)}</strong> — pas de cours</span></div>`;
     if (list.length) html += list.map((s) => sessionCard(s, { admin })).join('');
     else if (!closure) html += '<div class="day-empty">Pas de séance</div>';
@@ -546,9 +547,9 @@ async function viewAlerts() {
     <h1>Alertes</h1>
     ${notifications.length ? `<div class="card">${notifications.map((n) => `
       <div class="list-item alert ${n.read_at ? '' : 'unread'}">
-        <span class="alert-ico" aria-hidden="true">${icon[n.kind] || icon.admin}</span>
+        <span class="alert-ico" aria-hidden="true">${icon[n.kind] || (['move', 'new', 'cancel', 'restore'].includes(n.kind) ? icon.enrollment : icon.admin)}</span>
         <div class="grow"><strong>${esc(n.title)}</strong><div class="small muted">${esc(n.body)}</div><div class="small muted">${ago(n.created_at)}</div></div>
-        ${n.link ? `<a class="btn ${n.kind === 'place' ? '' : 'secondary'} small" href="${esc(n.link)}">${n.kind === 'place' ? 'Réserver' : n.kind === 'enrollment' ? 'Valider' : 'Voir'}</a>` : ''}
+        ${n.link ? `<a class="btn ${n.kind === 'place' || n.kind === 'new' ? '' : 'secondary'} small" href="${esc(n.link)}">${n.kind === 'place' || n.kind === 'new' ? 'Réserver' : n.kind === 'enrollment' ? 'Valider' : 'Voir'}</a>` : ''}
       </div>`).join('')}</div>` : '<div class="empty"><div class="big"></div>Aucune alerte pour le moment.<br>Vous serez prévenu·e ici dès qu’une place se libère.</div>'}`;
 }
 
@@ -650,7 +651,7 @@ function viewProfile() {
 function adminNav(active) {
   const tabs = [
     ['#/admin', 'Semaine'], ['#/admin/annee', 'Année'], ['#/admin/cours', 'Cours réguliers'],
-    ['#/admin/fermetures', 'Vacances'], ['#/admin/membres', 'Membres'], ['#/admin/reglages', 'Réglages'],
+    ['#/admin/fermetures', 'Vacances'], ['#/admin/appel', 'Appel'], ['#/admin/membres', 'Membres'], ['#/admin/reglages', 'Réglages'],
   ];
   return `<div class="subnav">${tabs.map(([h, l]) => `<a href="${h}" class="chip ${h === active ? 'active' : ''}">${l}</a>`).join('')}</div>`;
 }
@@ -669,7 +670,7 @@ async function viewAdminSessions() {
       <h1>${fmt(from, { day: 'numeric', month: 'short' })} – ${fmt(addDays(from, 6), { day: 'numeric', month: 'short', year: 'numeric' })}</h1>
       <button class="icon-btn" id="next" aria-label="Semaine suivante"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
       <button class="btn secondary small" id="now">Aujourd'hui</button>
-      <button class="btn small" id="add">+ Séance ponctuelle</button>
+      <button class="btn small" id="add">+ Ajouter une séance</button>
     </div>
     <p class="muted small">${plural(data.sessions.filter((s) => !s.cancelled).length, 'séance')} · ${plural(total, 'place')} occupées cette semaine. Touchez une séance pour voir les inscrit·es.</p>
     ${weekHtml(from, data, { admin: true })}`;
@@ -706,7 +707,8 @@ async function sessionDetailModal(id, after) {
       </div>` : ''}
     ${attendees.length ? `<p class="small"><a href="mailto:?bcc=${encodeURIComponent(attendees.map((a) => a.email).join(','))}&subject=${encodeURIComponent(`${s.title} — ${fmtLong(s.date)}`)}" class="mail"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></svg>Écrire à tous les inscrit·es</a></p>` : ''}
     <div class="btn-row" style="margin-top:16px">
-      <button class="btn secondary small" id="edit">Modifier</button>
+      <button class="btn secondary small" id="edit">Modifier / déplacer</button>
+      <a class="btn ghost small" href="#/admin/appel?date=${s.date}"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/></svg>Feuille d’appel</a>
       ${s.cancelled ? '<button class="btn ok small" id="restore">Rétablir la séance</button>' : '<button class="btn danger small" id="cancel">Annuler la séance</button>'}
       ${!attendees.length && !absent.length ? '<button class="btn ghost small" id="del">Supprimer</button>' : ''}
     </div>`, (m, close) => {
@@ -738,14 +740,14 @@ async function sessionDetailModal(id, after) {
     m.querySelector('#edit').onclick = () => { close(); editSessionModal(s, after); };
     const cancel = m.querySelector('#cancel');
     if (cancel) cancel.onclick = async () => {
-      const reason = prompt(`Annuler cette séance ?${attendees.length ? `\n${plural(attendees.length, 'personne')} inscrite(s) seront informée(s) dans l'application.` : ''}\n\nMotif (facultatif) :`, '');
+      const reason = prompt(`Annuler cette séance ?${attendees.length ? `\n${plural(attendees.length, 'personne')} inscrite(s) seront prévenue(s) par alerte et e-mail dans l'application.` : ''}\n\nMotif (facultatif) :`, '');
       if (reason === null) return;
-      try { await api(`/api/admin/sessions/${id}`, { method: 'PUT', body: { cancelled: true, cancel_reason: reason || 'Séance annulée' } }); toast('Séance annulée'); reopen(); }
+      try { await api(`/api/admin/sessions/${id}`, { method: 'PUT', body: { cancelled: true, cancel_reason: reason || 'Séance annulée' } }); toast('Séance annulée — les inscrit·es sont prévenu·es'); reopen(); }
       catch (err) { toast(err.message, true); }
     };
     const restore = m.querySelector('#restore');
     if (restore) restore.onclick = async () => {
-      try { await api(`/api/admin/sessions/${id}`, { method: 'PUT', body: { cancelled: false } }); toast('Séance rétablie'); reopen(); }
+      try { await api(`/api/admin/sessions/${id}`, { method: 'PUT', body: { cancelled: false } }); toast('Séance rétablie — les inscrit·es sont prévenu·es'); reopen(); }
       catch (err) { toast(err.message, true); }
     };
     const del = m.querySelector('#del');
@@ -759,8 +761,8 @@ async function sessionDetailModal(id, after) {
 function editSessionModal(s, after, defaultDate) {
   const v = s || { title: '', description: '', date: defaultDate && defaultDate > today() ? defaultDate : today(), start_time: '18:30', duration_min: 75, capacity: 12, location: '', color: '#8e3b6b' };
   modal(`
-    <div class="modal-head"><h2>${s ? 'Modifier la séance' : 'Séance ponctuelle'}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-    ${!s ? '<p class="small muted">Atelier, stage, cours exceptionnel… Pour un cours qui revient chaque semaine, utilisez « Cours réguliers ».</p>' : ''}
+    <div class="modal-head"><h2>${s ? 'Modifier ou déplacer' : 'Ajouter une séance'}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    ${!s ? '<p class="small muted">Séance supplémentaire, atelier, stage… Elle est ouverte à la réservation de tous les élèves. Pour un cours qui revient chaque semaine, utilisez « Cours réguliers ».</p>' : ''}
     <form id="f">
       <div class="field"><label>Titre</label><input name="title" value="${esc(v.title)}" required></div>
       <div class="grid3">
@@ -772,6 +774,7 @@ function editSessionModal(s, after, defaultDate) {
       </div>
       <div class="field"><label>Description</label><textarea name="description" rows="2">${esc(v.description)}</textarea></div>
       ${!s ? `<div class="field"><label>Couleur</label><input name="color" type="color" value="${v.color}"></div>` : ''}
+      <div class="field"><label class="check"><input type="checkbox" name="notify" checked>${s ? 'Prévenir tous les élèves si la date ou l’heure change (alerte + e-mail)' : 'Prévenir tous les élèves de cette nouvelle séance (alerte + e-mail)'}</label></div>
       <div class="error" id="err"></div>
       <button class="btn block">${s ? 'Enregistrer' : 'Créer la séance'}</button>
     </form>`, (m, close) => {
@@ -779,12 +782,65 @@ function editSessionModal(s, after, defaultDate) {
     f.onsubmit = async (e) => {
       e.preventDefault();
       try {
-        if (s) await api(`/api/admin/sessions/${s.id}`, { method: 'PUT', body: formData(f) });
-        else await api('/api/admin/sessions', { method: 'POST', body: formData(f) });
-        close(); toast('Séance enregistrée'); after && after();
+        const r = s ? await api(`/api/admin/sessions/${s.id}`, { method: 'PUT', body: formData(f) })
+          : await api('/api/admin/sessions', { method: 'POST', body: formData(f) });
+        close(); toast(r.notified ? `Séance enregistrée — ${plural(r.notified, 'élève')} prévenu${r.notified > 1 ? 's' : ''}` : 'Séance enregistrée'); after && after();
       } catch (err) { f.querySelector('#err').textContent = err.message; }
     };
   });
+}
+
+// Feuille d'appel imprimable d'une journée
+async function viewAttendance() {
+  const p = hashParams();
+  let date = p.date || today();
+  loading();
+  let data = await api(`/api/admin/day?date=${date}`);
+  // Sans date précisée : prochain jour de cours
+  if (!p.date && !data.sessions.length) {
+    const next = (await api(`/api/sessions?from=${today()}&to=${addDays(today(), 30)}`)).sessions.find((x) => !x.cancelled);
+    if (next) { date = next.date; data = await api(`/api/admin/day?date=${date}`); }
+  }
+  setHashParams('#/admin/appel', { date });
+  const rows = (list) => list.map((a) => `<tr><td class="box"><span></span></td><td><strong>${esc(a.name)}</strong></td><td>${a.kind === 'makeup' ? 'Rattrapage' : 'À l’année'}</td><td class="nowrap">${a.phone ? esc(a.phone) : ''}</td><td class="sign"></td></tr>`).join('');
+  const blank = (n) => Array.from({ length: n }, () => '<tr class="blank"><td class="box"><span></span></td><td></td><td></td><td></td><td class="sign"></td></tr>').join('');
+  const sheet = (x) => {
+    const s = x.session;
+    return `<section class="sheet">
+      <div class="sheet-head">
+        <div><div class="sheet-time">${s.start_time.replace(':', 'h')} – ${endTime(s.start_time, s.duration_min).replace(':', 'h')}</div>
+          <div class="sheet-title">${esc(s.title)}${s.location ? ` · ${esc(s.location)}` : ''}</div></div>
+        <div class="sheet-count">${s.cancelled ? '<span class="badge danger">Annulée</span>' : `${x.attendees.length} / ${s.capacity}`}</div>
+      </div>
+      ${s.cancelled ? `<p class="muted">Séance annulée${s.cancel_reason ? ` : ${esc(s.cancel_reason)}` : ''}.</p>` : `
+      <table class="roll">
+        <thead><tr><th class="box">Présent</th><th>Nom</th><th>Inscription</th><th>Téléphone</th><th class="sign">Remarque</th></tr></thead>
+        <tbody>${rows(x.attendees)}${blank(Math.min(3, Math.max(1, s.capacity - x.attendees.length)))}</tbody>
+      </table>
+      ${x.absent.length ? `<p class="sheet-absent"><strong>Ont libéré leur place :</strong> ${x.absent.map((a) => esc(a.name)).join(', ')}</p>` : ''}`}
+    </section>`;
+  };
+  $view.innerHTML = `
+    <div class="no-print">${adminNav('#/admin/appel')}</div>
+    <div class="week-head no-print">
+      <button class="icon-btn" id="prev" aria-label="Jour précédent">${'<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>'}</button>
+      <h1 style="text-transform:capitalize">${fmtFull(date)}</h1>
+      <button class="icon-btn" id="next" aria-label="Jour suivant">${'<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>'}</button>
+      <input type="date" id="jump" value="${date}" style="width:auto" aria-label="Choisir la date">
+      <button class="btn small" id="print" ${data.sessions.length ? '' : 'disabled'}><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/></svg>Imprimer</button>
+    </div>
+    <div class="print-page">
+      <header class="print-head">
+        <img src="/logo.png" alt="" class="print-logo">
+        <div><div class="print-brand">Nada Atma</div><div class="print-sub">Feuille d’appel — <span style="text-transform:capitalize">${fmtFull(date)}</span></div></div>
+      </header>
+      ${data.sessions.length ? data.sessions.map(sheet).join('') : '<div class="empty"><div class="big"></div>Pas de cours ce jour-là.</div>'}
+    </div>`;
+  const go = (d) => { location.hash = `#/admin/appel?date=${d}`; };
+  $view.querySelector('#prev').onclick = () => go(addDays(date, -1));
+  $view.querySelector('#next').onclick = () => go(addDays(date, 1));
+  $view.querySelector('#jump').onchange = (e) => e.target.value && go(e.target.value);
+  $view.querySelector('#print').onclick = () => window.print();
 }
 
 // Vue annuelle (année scolaire de septembre à août)

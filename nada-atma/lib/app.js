@@ -771,8 +771,8 @@ function createApp(db, opts = {}) {
   }, 'admin');
 
   // Séances
-  route('GET', '/api/admin/sessions/:id', async ({ params }) => {
-    const s = decorateSession(getSession(params.id));
+  function attendeesOf(sessionId) {
+    const s = decorateSession(getSession(sessionId));
     // Inscrit·es à l'année (présent·es ou absent·es) + rattrapages / réservations ponctuelles
     const regulars = q(`SELECT u.id, u.name, u.email, u.phone, a.id AS absence_id
                         FROM enrollments e JOIN sessions s ON s.id = ? JOIN users u ON u.id = e.user_id
@@ -787,7 +787,20 @@ function createApp(db, opts = {}) {
     ];
     const absent = regulars.filter((r) => r.absence_id).map((r) => ({ ...r, kind: 'absent' }));
     return { session: s, attendees, absent };
+  }
+  route('GET', '/api/admin/sessions/:id', async ({ params }) => attendeesOf(params.id), 'admin');
+
+  // Feuille d'appel : toutes les séances d'une journée avec leurs participant·es
+  route('GET', '/api/admin/day', async ({ query }) => {
+    const date = reqDate(query.date, 'Date');
+    const ids = q('SELECT id FROM sessions WHERE date = ? ORDER BY start_time').all(date).map((r) => r.id);
+    return { date, sessions: ids.map(attendeesOf) };
   }, 'admin');
+
+  // Prévenir les élèves d'un changement de planning (alerte + e-mail)
+  const memberIds = () => q("SELECT id FROM users WHERE active = 1 AND role = 'member'").all().map((r) => r.id);
+  const weekLink = (date) => `#/planning?semaine=${D.addDays(date, -((D.weekday(date) + 6) % 7))}`;
+  function announce(ids, kind, title, body, link) { if (ids.length) notify(ids, { kind, title, body, link }); }
 
   route('POST', '/api/admin/sessions', async ({ body }) => {
     const title = str(body.title, 100) || fail(400, 'Le titre est obligatoire');
@@ -796,7 +809,15 @@ function createApp(db, opts = {}) {
       title, str(body.description, 1000), reqDate(body.date, 'Date'), reqTime(body.start_time, 'Heure'),
       int(body.duration_min, 5, 600, 'Durée'), int(body.capacity, 1, 500, 'Nombre de places'),
       str(body.location, 200), /^#[0-9a-fA-F]{6}$/.test(body.color || '') ? body.color : '#8e3b6b');
-    return { session: decorateSession(getSession(r.lastInsertRowid)) };
+    const ns = getSession(r.lastInsertRowid);
+    let notified = 0;
+    if (body.notify !== false) {
+      const ids = memberIds(); notified = ids.length;
+      const when = `${longDate(ns.date)} à ${hhmm(ns.start_time)}`;
+      announce(ids, 'new', `Nouvelle séance ${when}`,
+        `Une séance « ${ns.title} » est ajoutée le ${when}${ns.location ? ` (${ns.location})` : ''}. ${ns.capacity} places : réservez-la dans l'application.`, weekLink(ns.date));
+    }
+    return { session: decorateSession(ns), notified };
   }, 'admin');
 
   route('PUT', '/api/admin/sessions/:id', async ({ params, body }) => {
@@ -812,10 +833,37 @@ function createApp(db, opts = {}) {
       cancelled: body.cancelled !== undefined ? (body.cancelled ? 1 : 0) : s.cancelled,
     };
     const reason = f.cancelled ? (body.cancel_reason !== undefined ? str(body.cancel_reason, 200) : s.cancel_reason) : '';
+    // Personnes concernées avant la modification (créneau, place libérée, rattrapage)
+    const before = memberIds().filter((id) => statusOf(s, id).status);
+    const beforeAll = q('SELECT id FROM users WHERE active = 1').all().map((r) => r.id).filter((id) => statusOf(s, id).status);
+    if (f.date !== s.date && s.template_id && q('SELECT 1 FROM sessions WHERE template_id = ? AND date = ? AND id != ?').get(s.template_id, f.date, s.id)) {
+      fail(409, 'Ce créneau a déjà une séance ce jour-là');
+    }
     q(`UPDATE sessions SET title=?, description=?, date=?, start_time=?, duration_min=?, capacity=?, location=?, cancelled=?, cancel_reason=?,
        closure_id = CASE WHEN ? = 0 THEN NULL ELSE closure_id END WHERE id=?`)
       .run(f.title, f.description, f.date, f.start_time, f.duration_min, f.capacity, f.location, f.cancelled, reason, f.cancelled, s.id);
-    return { session: decorateSession(getSession(s.id)) };
+    const oldWhen = `${longDate(s.date)} à ${hhmm(s.start_time)}`;
+    const newWhen = `${longDate(f.date)} à ${hhmm(f.start_time)}`;
+    let notified = 0;
+    if (body.notify !== false) {
+      if (f.cancelled && !s.cancelled) {
+        announce(beforeAll, 'cancel', `Séance annulée ${oldWhen}`,
+          `La séance « ${s.title} » du ${oldWhen} est annulée${reason ? ` : ${reason}` : ''}. Si c'était votre créneau, un rattrapage vous est offert.`, '#/mes-reservations');
+        notified = beforeAll.length;
+      } else if (!f.cancelled && s.cancelled) {
+        announce(beforeAll, 'restore', `Séance rétablie ${newWhen}`, `Bonne nouvelle : la séance « ${f.title} » du ${newWhen} est maintenue.`, weekLink(f.date));
+        notified = beforeAll.length;
+      } else if (!f.cancelled && (f.date !== s.date || f.start_time !== s.start_time)) {
+        const all = memberIds();
+        const others = all.filter((id) => !before.includes(id));
+        announce(before, 'move', `Votre séance est déplacée : ${newWhen}`,
+          `La séance « ${f.title} » prévue le ${oldWhen} est déplacée au ${newWhen}. Votre place y est conservée ; si vous ne pouvez pas venir, libérez-la dans l'application.`, weekLink(f.date));
+        announce(others, 'move', `Séance déplacée : ${newWhen}`,
+          `La séance « ${f.title} » du ${oldWhen} est déplacée au ${newWhen}.`, weekLink(f.date));
+        notified = all.length;
+      }
+    }
+    return { session: decorateSession(getSession(s.id)), notified };
   }, 'admin');
 
   route('DELETE', '/api/admin/sessions/:id', async ({ params }) => {

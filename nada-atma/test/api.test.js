@@ -324,3 +324,44 @@ test('inscription d\'office à valider + alerte « place libre » à tous les é
   await carol('POST', '/api/notifications/read');
   assert.equal((await carol('GET', '/api/me')).data.unread, 0);
 });
+
+test('déplacer / ajouter une séance prévient tout le monde ; feuille d\'appel du jour', async (t) => {
+  NOW = new Date(2026, 8, 4, 10, 0);
+  const { server, client, mailer } = await start();
+  t.after(() => server.close());
+  const admin = client(), alice = client(), bob = client();
+  await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  const aId = (await alice('POST', '/api/register', { name: 'Alice', email: 'alice@example.com', password: 'motdepasse1' })).data.user.id;
+  await bob('POST', '/api/register', { name: 'Bob', email: 'bob@example.com', password: 'motdepasse1' });
+  const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 10, start_date: '2026-09-01', end_date: '2027-06-30' })).data.template;
+  await admin('POST', `/api/admin/templates/${mar.id}/enrollments`, { user_id: aId, confirmed: true });
+  const tue = (await admin('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0];
+
+  // Déplacer au mercredi 9 à 18h : Alice (concernée) et Bob (les autres) sont prévenus
+  mailer.sent.length = 0;
+  let r = await admin('PUT', `/api/admin/sessions/${tue.id}`, { date: '2026-09-09', start_time: '18:00' });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.notified, 2);
+  const an = (await alice('GET', '/api/notifications')).data.notifications[0];
+  assert.match(an.title, /Votre séance est déplacée : mercredi 9 septembre à 18h/);
+  assert.match((await bob('GET', '/api/notifications')).data.notifications[0].title, /Séance déplacée/);
+  // Alice garde sa place sur la séance déplacée
+  const moved = (await alice('GET', '/api/sessions?from=2026-09-09&to=2026-09-09')).data.sessions[0];
+  assert.equal(moved.my_status, 'enrolled');
+  await new Promise((res) => setTimeout(res, 20));
+  assert.equal(mailer.sent.length, 2);
+
+  // Ajouter une séance : tout le monde est prévenu
+  r = await admin('POST', '/api/admin/sessions', { title: 'Yoga du son', date: '2026-09-12', start_time: '10:00', duration_min: 90, capacity: 8 });
+  assert.equal(r.data.notified, 2);
+  assert.match((await bob('GET', '/api/notifications')).data.notifications[0].title, /Nouvelle séance samedi 12 septembre à 10h/);
+  // Sans prévenir
+  r = await admin('POST', '/api/admin/sessions', { title: 'Test', date: '2026-09-13', start_time: '10:00', duration_min: 60, capacity: 8, notify: false });
+  assert.equal(r.data.notified, 0);
+
+  // Feuille d'appel du mercredi 9
+  const day = (await admin('GET', '/api/admin/day?date=2026-09-09')).data;
+  assert.equal(day.sessions.length, 1);
+  assert.deepEqual(day.sessions[0].attendees.map((a) => a.name), ['Alice']);
+  assert.equal((await alice('GET', '/api/admin/day?date=2026-09-09')).status, 403);
+});
