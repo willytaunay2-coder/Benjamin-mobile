@@ -610,3 +610,58 @@ test('liste d’attente : par ordre de demande, ordre modifiable par la professe
   await admin('PUT', `/api/admin/sessions/${tue.id}`, { capacity: 3, notify: false });
   assert.equal((await C.Fay('GET', '/api/sessions?from=2026-09-08&to=2026-09-08')).data.sessions[0].my_status, 'booked');
 });
+
+test('élève à la séance : sans créneau, sans limite par semaine, décompte des séances', async (t) => {
+  NOW = new Date(2026, 8, 4, 10, 0);
+  const { server, client, mailer } = await start();
+  t.after(() => server.close());
+  const admin = client(), zoe = client(), alice = client();
+  await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  await admin('PUT', '/api/admin/settings', { booking_horizon_days: 0 });
+  const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 3, start_date: '2026-09-01', end_date: '2026-12-31' })).data.template;
+  const jeu = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 4, start_time: '18:30', duration_min: 60, capacity: 3, start_date: '2026-09-01', end_date: '2026-12-31' })).data.template;
+  // Compte « à la séance » : le créneau éventuel est ignoré
+  let r = await admin('POST', '/api/admin/users', { name: 'Zoé', email: 'zoe@example.com', plan: 'drop_in', template_id: mar.id });
+  assert.equal(r.data.user.plan, 'drop_in');
+  await new Promise((res) => setTimeout(res, 20));
+  assert.ok(mailer.sent.some((m) => m.to === 'zoe@example.com' && /Vous venez à la séance/.test(m.text)));
+  await zoe('POST', '/api/login', { email: 'zoe@example.com', password: r.data.temp_password });
+  const zid = r.data.user.id;
+  assert.equal((await zoe('GET', '/api/me')).data.enrollments.length, 0);
+  r = await admin('POST', '/api/admin/users', { name: 'Alice', email: 'alice@example.com', template_id: mar.id, send_email: false });
+  await alice('POST', '/api/login', { email: 'alice@example.com', password: r.data.temp_password });
+
+  // Deux cours la même semaine, puis la semaine suivante : aucune limite
+  const s = (await zoe('GET', '/api/sessions?from=2026-09-07&to=2026-09-17')).data.sessions;
+  for (const d of ['2026-09-08', '2026-09-10', '2026-09-15']) assert.equal((await zoe('POST', `/api/sessions/${s.find((x) => x.date === d).id}/book`)).status, 200);
+  // Décompte (le 8 est passé une fois la date avancée)
+  NOW = new Date(2026, 8, 9, 10, 0);
+  assert.deepEqual((await zoe('GET', '/api/me')).data.counts, { total: 3, done: 1, upcoming: 2, month: 3 });
+  const row = (await admin('GET', '/api/admin/users')).data.users.find((u) => u.id === zid);
+  assert.equal(row.plan, 'drop_in'); assert.equal(row.counts.total, 3);
+  // La professeure voit le décompte dans l'alerte
+  assert.ok((await admin('GET', '/api/notifications')).data.notifications.some((n) => /À la séance : 3 séances au total, 3 ce mois-ci/.test(n.body)));
+  // Un élève à l'année reste limité
+  assert.equal((await alice('POST', `/api/sessions/${s.find((x) => x.date === '2026-09-17').id}/book`)).status, 409);
+
+  // Bob attend sur le mardi 15 (complet : Alice + 2 places prises)
+  const bob = client();
+  r = await admin('POST', '/api/admin/users', { name: 'Bob', email: 'bob@example.com', plan: 'drop_in', send_email: false });
+  await bob('POST', '/api/login', { email: 'bob@example.com', password: r.data.temp_password });
+  const tue15 = s.find((x) => x.date === '2026-09-15');
+  const eve = client();
+  r = await admin('POST', '/api/admin/users', { name: 'Eve', email: 'eve@example.com', plan: 'drop_in', send_email: false });
+  await eve('POST', '/api/login', { email: 'eve@example.com', password: r.data.temp_password });
+  assert.equal((await eve('POST', `/api/sessions/${tue15.id}/book`)).status, 200);
+  assert.equal((await bob('POST', `/api/sessions/${tue15.id}/waitlist`)).status, 200);
+  // Passer Alice à la séance (fin de son créneau), puis Zoé à l'année
+  r = await admin('PUT', `/api/admin/users/${(await alice('GET', '/api/me')).data.user.id}/slot`, { plan: 'drop_in' });
+  assert.equal(r.status, 200);
+  assert.equal((await alice('GET', '/api/me')).data.user.plan, 'drop_in');
+  assert.equal((await alice('GET', '/api/me')).data.enrollments.filter((e) => !e.end_date).length, 0);
+  assert.equal((await alice('POST', `/api/sessions/${s.find((x) => x.date === '2026-09-17').id}/book`)).status, 200);
+  // Sa place du mardi 15 est allée à Bob, qui attendait
+  assert.equal((await bob('GET', '/api/sessions?from=2026-09-15&to=2026-09-15')).data.sessions[0].my_status, 'booked');
+  await admin('PUT', `/api/admin/users/${zid}/slot`, { template_id: jeu.id });
+  assert.equal((await zoe('GET', '/api/me')).data.user.plan, 'annual');
+});

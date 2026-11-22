@@ -162,6 +162,8 @@ function migrate(db) {
   const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!cols.includes('credit_adjust')) db.exec('ALTER TABLE users ADD COLUMN credit_adjust INTEGER NOT NULL DEFAULT 0');
   if (!cols.includes('notify_email')) db.exec('ALTER TABLE users ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1');
+  // Formule : 'annual' (un créneau à l'année) ou 'drop_in' (à la séance, sans limite par semaine)
+  if (!cols.includes('plan')) db.exec("ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'annual'");
   if (!cols.includes('notify_sms')) db.exec('ALTER TABLE users ADD COLUMN notify_sms INTEGER NOT NULL DEFAULT 1');
   const ecols = db.prepare('PRAGMA table_info(enrollments)').all().map((c) => c.name);
   // 'pending' : inscrit·e d'office par la professeure, en attente de validation par l'élève

@@ -163,7 +163,7 @@
   }
 
   // ---------- Sauvegarde dans le navigateur ----------
-  const KEY = 'nada-atma-demo-v7';
+  const KEY = 'nada-atma-demo-v8';
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
   function save() {
@@ -243,6 +243,22 @@
     const ma12 = next(T.ma12.id), je18 = next(T.je18.id), ma20 = next(T.ma20.id);
     if (ma12) await as('Nina Blanc', `/api/sessions/${ma12.id}/release`);
     if (ma20) { await as('Rose Dupuis', `/api/sessions/${ma20.id}/release`); await as('Lina Mercier', `/api/sessions/${ma20.id}/book`); }
+    // Deux élèves à la séance, avec des séances passées et à venir
+    DEMO.cookie = DEMO.tokens.prof;
+    const dropIns = [['Hélène Garnier', 7, ['ma12', 'je19', 've9']], ['Marc Olivier', 4, ['ma20', 'je12']]];
+    for (const [name, past, slots] of dropIns) {
+      n++; DEMO.cookie = DEMO.tokens.prof;
+      const email = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]+/g, '.') + '@exemple.fr';
+      const r = await api('POST', '/api/admin/users', { name, email, phone: `06 ${pad(10 + n)} 34 56 ${pad(10 + n)}`, plan: 'drop_in', send_email: false });
+      DEMO.cookie = ''; await api('POST', '/api/login', { email, password: r.temp_password }); tok[name] = DEMO.cookie;
+      const ids = slots.map((k) => T[k].id).join(',');
+      const olds = DEMO.db.prepare(`SELECT id FROM sessions WHERE template_id IN (${ids}) AND date < ? AND cancelled = 0 ORDER BY date DESC LIMIT ${past}`).all(today);
+      for (const o of olds) DEMO.db.prepare('INSERT INTO bookings(session_id, user_id) VALUES (?, ?)').run(o.id, r.user.id);
+    }
+    const ve9 = next(T.ve9.id), je19 = next(T.je19.id);
+    if (ve9) await as('Hélène Garnier', `/api/sessions/${ve9.id}/book`);
+    if (je19) await as('Hélène Garnier', `/api/sessions/${je19.id}/book`); // deux cours la même semaine : possible à la séance
+
     // Le jeudi 18h30 reste complet : on peut y essayer la liste d'attente
     // Le mardi 19h de Katia est complet : deux élèves attendent une place
     const ma19 = next(T.ma19.id);

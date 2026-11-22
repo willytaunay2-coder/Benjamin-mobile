@@ -640,3 +640,17 @@ table.roll .sign { width: 28%; }
 .waitlist .icon-btn:disabled { opacity: .3; cursor: default; }
 .wait-count { color: var(--warn); font-weight: 700; }
 .day-wait { margin: 0; color: var(--warn); }
+
+/* ---------- Élèves à la séance ---------- */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.plan-set { border: 0; padding: 0; margin: 0 0 14px; display: grid; gap: 8px; }
+.plan-set legend { padding: 0; margin-bottom: 8px; font-weight: 700; font-size: .88rem; color: var(--ink); }
+@media (min-width: 520px) { .plan-set { grid-template-columns: 1fr 1fr; } .plan-set legend { grid-column: 1 / -1; } }
+.badge.drop { background: #ede9f6; color: #5a4a8a; }
+.count-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0 0 14px; }
+.count-grid div { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 6px; border-radius: 16px; background: #fff; border: 1px solid var(--line); text-align: center; }
+.count-grid strong { font-family: var(--font-title); font-size: 1.6rem; color: var(--plum); line-height: 1; font-variant-numeric: tabular-nums; }
+.count-grid span { font-size: .72rem; color: var(--muted); }
+.history { list-style: none; margin: 0 0 8px; padding: 0; }
+.history li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: .88rem; }
+.plan-filter { margin: -6px 0 14px; }

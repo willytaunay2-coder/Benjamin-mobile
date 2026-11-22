@@ -105,7 +105,7 @@ function createApp(db, opts = {}) {
   });
 
   function publicUser(u) {
-    return u && { id: u.id, email: u.email, name: u.name, phone: u.phone, role: u.role, active: !!u.active, created_at: u.created_at, notify_email: u.notify_email !== 0, notify_sms: u.notify_sms !== 0 };
+    return u && { id: u.id, email: u.email, name: u.name, phone: u.phone, role: u.role, active: !!u.active, created_at: u.created_at, notify_email: u.notify_email !== 0, notify_sms: u.notify_sms !== 0, plan: u.plan || 'annual' };
   }
 
   // ---------- Alertes (cloche) + e-mails ----------
@@ -152,11 +152,12 @@ function createApp(db, opts = {}) {
   // La professeure est prévenue (cloche + notification) quand quelqu'un s'inscrit sur une séance
   function tellProf(userId, sessionId, verb = 's’inscrit') {
     const s = getSession(sessionId);
-    const who = q('SELECT name, role FROM users WHERE id = ?').get(userId);
+    const who = q('SELECT name, role, plan FROM users WHERE id = ?').get(userId);
     if (!who || who.role === 'admin') return;
     const when = `${longDate(s.date)} à ${hhmm(s.start_time)}`;
+    const c = who.plan === 'drop_in' ? sessionCounts(userId) : null;
     notify(adminIds(), { kind: 'admin', title: `${who.name} ${verb} ${when}`,
-      body: `${s.title} : ${occupiedOf(s)} / ${s.capacity} places occupées.`, link: `#/admin/jour?date=${s.date}` }, false);
+      body: `${s.title} : ${occupiedOf(s)} / ${s.capacity} places occupées.${c ? ` À la séance : ${c.total} séance${c.total > 1 ? 's' : ''} au total, ${c.month} ce mois-ci.` : ''}`, link: `#/admin/jour?date=${s.date}` }, false);
   }
 
   // ---------- Liste d'attente ----------
@@ -167,6 +168,7 @@ function createApp(db, opts = {}) {
   }
   // Inscrit·e ailleurs cette semaine : ses autres attentes de la semaine n'ont plus lieu d'être
   function clearWeekWaits(userId, date, exceptSessionId = 0) {
+    if (isDropIn(userId)) { q('DELETE FROM waitlist WHERE user_id = ? AND session_id = ?').run(userId, exceptSessionId); return; }
     const mon = D.addDays(date, -((D.weekday(date) + 6) % 7));
     q(`DELETE FROM waitlist WHERE user_id = ? AND session_id != ? AND session_id IN (SELECT id FROM sessions WHERE date BETWEEN ? AND ?)`)
       .run(userId, exceptSessionId, mon, D.addDays(mon, 6));
@@ -338,7 +340,17 @@ function createApp(db, opts = {}) {
 
   // Vérifie qu'un membre peut réserver cette séance
   // Un cours par semaine : la séance déjà prévue cette semaine-là (son cours non annulé, ou une place prise)
+  const isDropIn = (userId) => q('SELECT plan FROM users WHERE id = ?').get(userId)?.plan === 'drop_in';
+  // Séances prises (places réservées, hors séances annulées) : pour le décompte des élèves à la séance
+  function sessionCounts(userId) {
+    const today = D.toISO(now()), month = today.slice(0, 7);
+    const rows = q(`SELECT s.date FROM bookings b JOIN sessions s ON s.id = b.session_id
+                    WHERE b.user_id = ? AND b.status = 'booked' AND s.cancelled = 0`).all(userId);
+    return { total: rows.length, done: rows.filter((r) => r.date < today).length, upcoming: rows.filter((r) => r.date >= today).length,
+      month: rows.filter((r) => r.date.startsWith(month)).length };
+  }
   function courseInWeek(userId, date) {
+    if (isDropIn(userId)) return null; // à la séance : autant de cours qu'on veut
     const mon = D.addDays(date, -((D.weekday(date) + 6) % 7)), sun = D.addDays(mon, 6);
     const own = q(`SELECT s.* FROM sessions s JOIN enrollments e ON ${COVERS} AND e.user_id = ?
                    WHERE s.date BETWEEN ? AND ? AND s.cancelled = 0
@@ -477,6 +489,7 @@ function createApp(db, opts = {}) {
       credits: user ? creditsFor(user.id) : 0,
       unread: user ? q('SELECT COUNT(*) n FROM notifications WHERE user_id = ? AND read_at IS NULL').get(user.id).n : 0,
       enrollments: user ? enrollmentsOf(user.id) : [],
+      counts: user ? sessionCounts(user.id) : null,
       settings: {
         studio_name: st.studio_name,
         cancel_deadline_hours: Number(st.cancel_deadline_hours),
@@ -874,6 +887,10 @@ function createApp(db, opts = {}) {
     else q('DELETE FROM enrollments WHERE id = ?').run(e.id); // jamais commencée
     q(`DELETE FROM absences WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE template_id = ? AND date >= ?)`)
       .run(e.user_id, e.template_id, today);
+    // Sa place se libère sur les séances suivantes : la liste d'attente en profite d'abord
+    for (const r of q('SELECT DISTINCT session_id FROM waitlist WHERE session_id IN (SELECT id FROM sessions WHERE template_id = ? AND date >= ?)').all(e.template_id, today)) {
+      promoteWaitlist(r.session_id);
+    }
   }
   route('DELETE', '/api/admin/enrollments/:id', async ({ params }) => {
     const e = q('SELECT * FROM enrollments WHERE id = ? AND end_date IS NULL').get(params.id) || fail(404, 'Inscription introuvable');
@@ -1135,7 +1152,7 @@ function createApp(db, opts = {}) {
                 WHERE b.user_id = u.id AND b.status = 'booked' AND s.date >= ?) AS upcoming
               FROM users u ORDER BY u.name COLLATE NOCASE`).all(D.toISO(now()))
       .map((u) => ({
-        ...publicUser(u), upcoming: u.upcoming, credits: creditsFor(u.id),
+        ...publicUser(u), upcoming: u.upcoming, credits: creditsFor(u.id), counts: sessionCounts(u.id),
         slot_ids: enrollmentsOf(u.id).map((e) => e.template_id),
         enrollments: enrollmentsOf(u.id).map((e) => ({ template_id: e.template_id, start_date: e.start_date, end_date: e.end_date })),
         slots: enrollmentsOf(u.id).map((e) => `${['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'][e.weekday]} ${e.start_time.replace(':', 'h')} ${e.title}`),
@@ -1154,11 +1171,11 @@ function createApp(db, opts = {}) {
     mailer.sendLater([{
       to: u.email,
       subject: `${studio} — votre compte est prêt`,
-      text: `Bonjour ${firstName(u.name)},\n\nVotre compte ${studio} est créé.${slotText ? `\nVotre cours de la semaine : ${slotText}.` : ''}\n\nPour vous connecter${appUrl ? ` : ${appUrl}/` : ''}\nE-mail : ${u.email}\nMot de passe provisoire : ${pw}\n\nVous pourrez le changer dans votre profil. Si vous ne pouvez pas venir à un cours, annulez-le dans l'application : votre place sera proposée aux autres élèves.\n\nÀ bientôt sur le tapis,\n${studio}`,
+      text: `Bonjour ${firstName(u.name)},\n\nVotre compte ${studio} est créé.${slotText === 'drop_in' ? '\nVous venez à la séance : inscrivez-vous aux cours de votre choix dans l’application.' : slotText ? `\nVotre cours de la semaine : ${slotText}.` : ''}\n\nPour vous connecter${appUrl ? ` : ${appUrl}/` : ''}\nE-mail : ${u.email}\nMot de passe provisoire : ${pw}\n\nVous pourrez le changer dans votre profil. Si vous ne pouvez pas venir à un cours, annulez-le dans l'application : votre place sera proposée aux autres élèves.\n\nÀ bientôt sur le tapis,\n${studio}`,
     }]);
     // Et par SMS, si un numéro est connu et que les SMS sont activés
     if ((settings().sms_mode || 'all') !== 'off' && toInternational(u.phone)) {
-      sms.sendLater([{ to: u.phone, text: `${studio} : bonjour ${firstName(u.name)}, votre compte est pret.${slotText ? ` Votre cours : ${slotText.split(',')[0]}.` : ''} Connexion${appUrl ? ` ${appUrl}/` : ''} avec ${u.email}, mot de passe provisoire ${pw}` }]);
+      sms.sendLater([{ to: u.phone, text: `${studio} : bonjour ${firstName(u.name)}, votre compte est pret.${slotText === 'drop_in' ? ' Inscrivez-vous aux cours de votre choix.' : slotText ? ` Votre cours : ${slotText.split(',')[0]}.` : ''} Connexion${appUrl ? ` ${appUrl}/` : ''} avec ${u.email}, mot de passe provisoire ${pw}` }]);
     }
   }
   const slotLabel = (t) => `${DAY_NAMES[t.weekday]} ${hhmm(t.start_time)}`;
@@ -1169,24 +1186,29 @@ function createApp(db, opts = {}) {
     if (!name) fail(400, 'Le nom est obligatoire');
     if (!isEmail(email)) fail(400, 'Adresse e-mail invalide');
     if (q('SELECT 1 FROM users WHERE email = ?').get(email)) fail(409, 'Un compte existe déjà avec cette adresse');
-    const t = body.template_id ? (q('SELECT * FROM templates WHERE id = ? AND active = 1').get(body.template_id) || fail(404, 'Créneau introuvable')) : null;
+    const plan = body.plan === 'drop_in' ? 'drop_in' : 'annual';
+    const t = plan === 'annual' && body.template_id ? (q('SELECT * FROM templates WHERE id = ? AND active = 1').get(body.template_id) || fail(404, 'Créneau introuvable')) : null;
     const pw = tempPassword();
     const out = tx(db, () => {
-      const r = q("INSERT INTO users(email, name, phone, password_hash, role) VALUES (?,?,?,?,'member')").run(email, name, phone, hashPassword(pw));
+      const r = q("INSERT INTO users(email, name, phone, password_hash, role, plan) VALUES (?,?,?,?,'member',?)").run(email, name, phone, hashPassword(pw), plan);
       const id = Number(r.lastInsertRowid);
       const en = t ? enroll(t, id, 'confirmed') : null;
       return { id, en };
     });
     const u = q('SELECT * FROM users WHERE id = ?').get(out.id);
-    if (body.send_email !== false) welcomeMail(u, pw, t ? `${slotLabel(t)}, à partir du ${longDate(out.en.start_date)}` : '');
+    if (body.send_email !== false) welcomeMail(u, pw, t ? `${slotLabel(t)}, à partir du ${longDate(out.en.start_date)}` : plan === 'drop_in' ? 'drop_in' : '');
     return { user: publicUser(u), temp_password: pw, start_date: out.en?.start_date || null };
   }, 'admin');
 
   // Changer le créneau à l'année d'un·e élève (ou le retirer avec template_id null)
   route('PUT', '/api/admin/users/:id/slot', async ({ params, body }) => {
     const u = q('SELECT * FROM users WHERE id = ?').get(params.id) || fail(404, 'Membre introuvable');
-    const t = body.template_id ? (q('SELECT * FROM templates WHERE id = ? AND active = 1').get(body.template_id) || fail(404, 'Créneau introuvable')) : null;
+    const plan = body.plan === 'drop_in' ? 'drop_in' : 'annual';
+    const t = plan === 'annual' && body.template_id ? (q('SELECT * FROM templates WHERE id = ? AND active = 1').get(body.template_id) || fail(404, 'Créneau introuvable')) : null;
     return tx(db, () => {
+      const was = u.plan || 'annual';
+      q('UPDATE users SET plan = ? WHERE id = ?').run(plan, u.id);
+      if (plan === 'drop_in' && was !== 'drop_in') notify([u.id], { kind: 'enrollment', title: 'Vous venez désormais à la séance', body: 'Inscrivez-vous aux cours de votre choix dans l’application.', link: '#/planning' });
       const from = body.from ? reqDate(body.from, 'Date de début') : null;
       const cur = q('SELECT * FROM enrollments WHERE user_id = ? AND end_date IS NULL').all(u.id);
       if (t && cur.length === 1 && cur[0].template_id === t.id) return { ok: true, unchanged: true };

@@ -21,6 +21,11 @@ le change dans son profil. Le créneau peut être changé à tout moment depuis 
 autres élèves sont prévenus** (alerte 🔔 + e-mail) et le premier qui la prend l'a. Le cours n'est pas rattrapé.
 « Je viens finalement » rend la place tant que personne ne l'a prise.
 
+**Deux formules.** *À l'année* : un créneau fixe chaque semaine (un cours par semaine). *À la séance* : pas de
+créneau, l'élève s'inscrit aux cours de son choix, sans limite par semaine ; ses séances sont comptées (total, ce
+mois-ci, à venir) et visibles par la professeure (Élèves › filtre « À la séance », fiche avec l'historique) et par
+l'élève sur son planning. La formule se choisit à la création du compte et se change depuis la fiche de l'élève.
+
 **Liste d'attente.** Sur un cours complet, l'élève (sans autre cours cette semaine-là) rejoint la liste d'attente, par
 ordre de demande. Quand une place se libère, la première personne disponible est inscrite automatiquement et prévenue ;
 l'alerte « place libre » ne part aux autres que si la liste est vide. La professeure voit la liste dans le détail de la

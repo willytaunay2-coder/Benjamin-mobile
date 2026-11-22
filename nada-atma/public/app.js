@@ -353,6 +353,11 @@ function greetingHtml(sessions) {
 function slotBanner() {
   if (!state.user || isAdmin() && !state.enrollments.length) return '';
   if (state.enrollments.some((e) => e.status === 'pending')) return pendingHtml();
+  if (state.user.plan === 'drop_in') {
+    const c = state.counts || { total: 0, month: 0, upcoming: 0 };
+    return `<div class="slot-banner"><div><div class="small muted">Vous venez à la séance</div><strong>Inscrivez-vous aux cours de votre choix</strong>
+      <div class="small">${c.total ? `${plural(c.total, 'séance')} prise${c.total > 1 ? 's' : ''}${c.month ? ` · ${c.month} ce mois-ci` : ''}${c.upcoming ? ` · ${c.upcoming} à venir` : ''}` : 'Aucune séance prise pour l’instant.'}</div></div></div>`;
+  }
   if (!state.enrollments.length) {
     return `<div class="slot-banner"><div><strong>Votre cours de la semaine</strong><div class="small">Votre professeure vous attribue votre créneau. En attendant, vous pouvez prendre une place libre.</div></div></div>`;
   }
@@ -427,7 +432,7 @@ function confirmBook(s, after) {
       <div class="day-time"><strong>${hm(s.start_time)}</strong><span>${hm(endTime(s.start_time, s.duration_min))}</span></div>
       <div><strong>${cap(fmtFull(s.date))}</strong><div class="small muted">${esc(s.title)} · ${s.duration_min} min${s.location ? ` · ${esc(s.location)}` : ''}</div></div>
     </div>
-    <p class="small muted">Un seul cours par semaine. Si vous ne pouvez finalement pas venir, annulez pour laisser la place à quelqu’un d’autre.</p>
+    <p class="small muted">${state.user.plan === 'drop_in' ? 'Cette séance sera comptée dans vos séances.' : 'Un seul cours par semaine.'} Si vous ne pouvez finalement pas venir, annulez pour laisser la place à quelqu’un d’autre.</p>
     <div class="btn-row" style="margin-top:14px"><button class="btn" id="confirm-book">Confirmer l’inscription</button><button class="btn ghost" data-close>Retour</button></div>`, (m, close) => {
     m.querySelector('#confirm-book').onclick = async (e) => { e.target.disabled = true; close(); await book(s.id, after); };
   });
@@ -499,7 +504,7 @@ async function viewPlanning() {
   setHashParams('#/planning', { semaine: p.semaine ? from : '' });
   const to = addDays(from, 6);
   // Un cours par semaine : les semaines où l'élève a déjà un cours
-  state.takenWeeks = new Set(data.sessions.filter((x) => !x.cancelled && (x.my_status === 'enrolled' || x.my_status === 'booked')).map((x) => mondayOf(x.date)));
+  state.takenWeeks = state.user && state.user.plan === 'drop_in' ? new Set() : new Set(data.sessions.filter((x) => !x.cancelled && (x.my_status === 'enrolled' || x.my_status === 'booked')).map((x) => mondayOf(x.date)));
   $view.innerHTML = `
     ${!state.user ? `<div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p>
       <p class="muted">Consultez le planning et <a href="#/inscription">créez votre compte</a> pour choisir votre créneau.</p></div>` : greetingHtml(data.sessions) + slotBanner() + '<div id="push-invite"></div>'}
@@ -1457,6 +1462,18 @@ function passwordModal(name, email, pw, sent) {
   });
 }
 
+// Choix de la formule : masque le choix du créneau pour « à la séance »
+function planToggle(m, slotBlock) {
+  const sync = () => {
+    const v = (m.querySelector('input[name=plan]:checked') || {}).value;
+    m.querySelectorAll('.plan-set .radio-card').forEach((c) => c.classList.toggle('on', c.querySelector('input').checked));
+    slotBlock.hidden = v === 'drop_in';
+  };
+  m.querySelectorAll('input[name=plan]').forEach((r) => { r.onchange = sync; });
+  sync();
+}
+const countsText = (c) => c ? `${plural(c.total, 'séance')}${c.month ? ` · ${c.month} ce mois-ci` : ''}${c.upcoming ? ` · ${c.upcoming} à venir` : ''}` : '';
+
 function newStudentModal(templates) {
   modal(`
     <div class="modal-head"><h2>Nouvel élève</h2>${CLOSE_X}</div>
@@ -1464,15 +1481,21 @@ function newStudentModal(templates) {
       <div class="field"><label for="n-name">Prénom et nom</label><input id="n-name" name="name" required autocomplete="off"></div>
       <div class="field"><label for="n-email">E-mail</label><input id="n-email" name="email" type="email" required autocomplete="off"></div>
       <div class="field"><label for="n-phone">Téléphone</label><input id="n-phone" name="phone" type="tel" autocomplete="off"></div>
-      <div class="field"><label for="n-slot">Cours de la semaine (à l’année)</label><select id="n-slot" name="template_id">${slotOptions(templates, null)}</select></div>
+      <fieldset class="field plan-set"><legend>Formule</legend>
+        <label class="radio-card on"><input type="radio" name="plan" value="annual" checked><span><strong>À l’année</strong><span class="small muted">Un cours fixe chaque semaine.</span></span></label>
+        <label class="radio-card"><input type="radio" name="plan" value="drop_in"><span><strong>À la séance</strong><span class="small muted">S’inscrit aux cours de son choix ; ses séances sont comptées.</span></span></label>
+      </fieldset>
+      <div class="field" id="n-slot-field"><label for="n-slot">Cours de la semaine (à l’année)</label><select id="n-slot" name="template_id">${slotOptions(templates, null)}</select></div>
       <label class="check"><input type="checkbox" name="send_email" checked> Envoyer les identifiants par e-mail</label>
       <div class="btn-row" style="justify-content:flex-end;margin-top:16px">
         <button type="button" class="btn ghost" data-close>Annuler</button><button class="btn">Créer le compte</button></div>
     </form>`, (m, close) => {
+    planToggle(m, m.querySelector('#n-slot-field'));
     m.querySelector('#f').onsubmit = async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
-      const body = { name: f.get('name'), email: f.get('email'), phone: f.get('phone'), template_id: Number(f.get('template_id')) || null, send_email: !!f.get('send_email') };
+      const plan = f.get('plan') === 'drop_in' ? 'drop_in' : 'annual';
+      const body = { name: f.get('name'), email: f.get('email'), phone: f.get('phone'), plan, template_id: plan === 'annual' ? Number(f.get('template_id')) || null : null, send_email: !!f.get('send_email') };
       try {
         const r = await api('/api/admin/users', { method: 'POST', body });
         close();
@@ -1486,14 +1509,18 @@ function newStudentModal(templates) {
 async function viewAdminUsers() {
   loading();
   const [{ users }, { templates }] = await Promise.all([api('/api/admin/users'), api('/api/admin/templates')]);
+  let planFilter = 'all';
+  const nDrop = users.filter((u) => u.role === 'member' && u.plan === 'drop_in').length;
   const render = (term = '') => {
     const t = term.toLowerCase();
-    const list = users.filter((u) => !t || u.name.toLowerCase().includes(t) || u.email.toLowerCase().includes(t));
+    const list = users.filter((u) => (!t || u.name.toLowerCase().includes(t) || u.email.toLowerCase().includes(t))
+      && (planFilter === 'all' || (u.role === 'member' && (u.plan || 'annual') === planFilter)));
     return list.map((u) => `
       <button class="list-item member-row" data-user="${u.id}">
         <span class="avatar">${esc(u.name.split(/\s+/).map((w) => w[0] || '').join('').slice(0, 2).toUpperCase())}</span>
         <span class="grow"><strong>${esc(u.name)}</strong> ${u.role === 'admin' ? '<span class="badge plum">Prof</span>' : ''} ${u.active ? '' : '<span class="badge danger">Désactivé</span>'}
-          <span class="small ${u.slots.length ? '' : 'muted'}" style="display:block">${u.slots.length ? u.slots.map(esc).join(' · ') : 'Pas de créneau'}</span></span>
+          ${u.plan === 'drop_in' ? '<span class="badge drop">À la séance</span>' : ''}
+          <span class="small ${u.slots.length || u.plan === 'drop_in' ? '' : 'muted'}" style="display:block">${u.plan === 'drop_in' ? countsText(u.counts) : u.slots.length ? u.slots.map(esc).join(' · ') : 'Pas de créneau'}</span></span>
         <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
       </button>`).join('') || '<p class="muted">Aucun résultat.</p>';
   };
@@ -1501,49 +1528,81 @@ async function viewAdminUsers() {
     ${adminNav('#/admin/membres')}
     <div class="section-title"><h1 style="margin:0">Élèves <span class="badge">${users.filter((u) => u.role !== 'admin').length}</span></h1><button class="btn" id="new">+ Nouvel élève</button></div>
     <input class="search" id="q" type="search" placeholder="Rechercher un nom ou un e-mail…" aria-label="Rechercher">
+    <div class="subnav plan-filter" role="group" aria-label="Formule">
+      <button class="chip active" data-plan="all">Tous</button><button class="chip" data-plan="annual">À l’année</button><button class="chip" data-plan="drop_in">À la séance (${nDrop})</button>
+    </div>
     <div class="card" id="list">${render()}</div>
     ${users.length ? `<p class="small"><a href="mailto:?bcc=${encodeURIComponent(users.filter((u) => u.active).map((u) => u.email).join(','))}" class="mail"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></svg>Écrire à tous les élèves</a></p>` : ''}`;
   $view.querySelector('#q').oninput = (e) => { $view.querySelector('#list').innerHTML = render(e.target.value); };
   $view.querySelector('#new').onclick = () => newStudentModal(templates);
   $view.onclick = (e) => {
+    const pf = e.target.closest('[data-plan]');
+    if (pf) {
+      planFilter = pf.dataset.plan;
+      $view.querySelectorAll('[data-plan]').forEach((c) => c.classList.toggle('active', c === pf));
+      $view.querySelector('#list').innerHTML = render($view.querySelector('#q').value);
+      return;
+    }
     const b = e.target.closest('[data-user]');
     if (!b) return;
     studentModal(users.find((x) => String(x.id) === b.dataset.user), templates, viewAdminUsers);
   };
 }
 
-// Fiche d'un·e élève : créneau habituel (modifiable à partir d'une date), compte
-function studentModal(u, templates, after) {
+// Fiche d'un·e élève : formule (à l'année ou à la séance), créneau habituel modifiable à partir d'une date, compte
+async function studentModal(u, templates, after) {
   const tName = (id) => { const t = templates.find((x) => x.id === id); return t ? `${DAYS[t.weekday]} ${hm(t.start_time)}` : ''; };
+  const dropIn = u.plan === 'drop_in';
   const ens = u.enrollments || [];
   const now = ens.find((e) => e.start_date <= today()) || null;
   const next = ens.find((e) => e.start_date > today()) || null;
   const current = now || next;
+  let history = [];
+  if (dropIn) { try { history = (await api(`/api/admin/users/${u.id}/bookings`)).bookings.filter((b) => !b.cancelled); } catch { /* */ } }
   const slotNow = now ? `<strong>${tName(now.template_id)}</strong>${now.end_date ? ` <span class="muted">jusqu’au ${fmtLong(now.end_date)}</span>` : ''}` : '<span class="muted">Pas de créneau</span>';
+  const c = u.counts || { total: 0, month: 0, upcoming: 0, done: 0 };
   modal(`
     <div class="modal-head"><h2>${esc(u.name)}</h2>${CLOSE_X}</div>
     <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''}</p>
-    <div class="slot-now"><span class="small muted">Créneau habituel</span><div>${slotNow}</div>
-      ${next ? `<div class="small">puis <strong>${tName(next.template_id)}</strong> à partir du ${fmtLong(next.start_date)}</div>` : ''}</div>
-    <h3>Changer le créneau habituel</h3>
-    <div class="grid2">
-      <div class="field"><label for="slot">Nouveau créneau</label><select id="slot">${slotOptions(templates, current ? current.template_id : null)}</select></div>
-      <div class="field"><label for="slot-from">À partir du</label><input id="slot-from" type="date" value="${today()}" min="${today()}"></div>
+    ${dropIn ? `
+    <div class="slot-now"><span class="small muted">Formule</span><div><strong>À la séance</strong></div></div>
+    <div class="count-grid">
+      <div><strong>${c.total}</strong><span>séance${c.total > 1 ? 's' : ''} au total</span></div>
+      <div><strong>${c.month}</strong><span>ce mois-ci</span></div>
+      <div><strong>${c.upcoming}</strong><span>à venir</span></div>
     </div>
-    <p class="small muted">L’élève est prévenu·e. Ses séances avant cette date ne changent pas.</p>
-    <div class="btn-row"><button class="btn" id="save">Changer le créneau</button></div>
+    ${history.length ? `<h3>Ses séances</h3><ul class="history">${history.slice(0, 12).map((b) => `<li><span>${cap(fmt(b.date, { weekday: 'short', day: 'numeric', month: 'short' }))} · ${hm(b.start_time)}</span>${b.date >= today() ? '<span class="badge">à venir</span>' : ''}</li>`).join('')}</ul>${history.length > 12 ? `<p class="small muted">… et ${history.length - 12} de plus.</p>` : ''}` : '<p class="small muted">Pas encore de séance.</p>'}`
+    : `<div class="slot-now"><span class="small muted">Créneau habituel (à l’année)</span><div>${slotNow}</div>
+      ${next ? `<div class="small">puis <strong>${tName(next.template_id)}</strong> à partir du ${fmtLong(next.start_date)}</div>` : ''}</div>`}
+    <h3>${dropIn ? 'Changer de formule' : 'Changer le créneau ou la formule'}</h3>
+    <fieldset class="field plan-set"><legend class="sr-only">Formule</legend>
+      <label class="radio-card"><input type="radio" name="plan" value="annual" ${dropIn ? '' : 'checked'}><span><strong>À l’année</strong><span class="small muted">Un cours fixe chaque semaine.</span></span></label>
+      <label class="radio-card"><input type="radio" name="plan" value="drop_in" ${dropIn ? 'checked' : ''}><span><strong>À la séance</strong><span class="small muted">Cours au choix, séances comptées.</span></span></label>
+    </fieldset>
+    <div id="slot-block">
+      <div class="grid2">
+        <div class="field"><label for="slot">Créneau</label><select id="slot">${slotOptions(templates, current ? current.template_id : null)}</select></div>
+        <div class="field"><label for="slot-from">À partir du</label><input id="slot-from" type="date" value="${today()}" min="${today()}"></div>
+      </div>
+      <p class="small muted">Les séances avant cette date ne changent pas.</p>
+    </div>
+    <p class="small muted">L’élève est prévenu·e du changement.</p>
+    <div class="btn-row"><button class="btn" id="save">Enregistrer</button></div>
     <h3 style="margin-top:20px">Compte</h3>
     <div class="btn-row">
       <button class="btn secondary small" id="pw">Nouveau mot de passe</button>
       ${u.id !== state.user.id ? `<button class="btn ${u.active ? 'danger' : 'ok'} small" id="act">${u.active ? 'Désactiver' : 'Réactiver'}</button>` : ''}
     </div>`, (m, close) => {
+    planToggle(m, m.querySelector('#slot-block'));
     m.querySelector('#save').onclick = async () => {
-      const id = Number(m.querySelector('#slot').value) || null;
+      const plan = (m.querySelector('input[name=plan]:checked') || {}).value === 'drop_in' ? 'drop_in' : 'annual';
+      const id = plan === 'annual' ? Number(m.querySelector('#slot').value) || null : null;
       const from = m.querySelector('#slot-from').value || today();
       try {
-        const r = await api(`/api/admin/users/${u.id}/slot`, { method: 'PUT', body: { template_id: id, from } });
+        const r = await api(`/api/admin/users/${u.id}/slot`, { method: 'PUT', body: { plan, template_id: id, from } });
         close();
-        toast(r.unchanged ? 'C’est déjà son créneau' : id ? `Créneau changé à partir du ${fmtLong(r.start_date)} — l’élève est prévenu·e` : 'Créneau retiré');
+        toast(plan === 'drop_in' ? (dropIn ? 'Enregistré' : 'Passé·e à la séance — l’élève est prévenu·e')
+          : r.unchanged ? 'C’est déjà son créneau' : id ? `Créneau à partir du ${fmtLong(r.start_date)} — l’élève est prévenu·e` : 'Créneau retiré');
         after && after();
       } catch (err) { toast(err.message, true); }
     };
@@ -1612,6 +1671,7 @@ async function refreshMe() {
   state.settings = r.settings;
   state.enrollments = r.enrollments;
   state.unread = r.unread || 0;
+  state.counts = r.counts;
   renderBell();
   document.title = `${r.settings.studio_name} — Réservations`;
 }
