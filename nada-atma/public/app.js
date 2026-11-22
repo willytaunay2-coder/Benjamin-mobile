@@ -896,7 +896,7 @@ function editSessionModal(s, after, defaultDate) {
   const v = s || { title: '', description: '', date: defaultDate && defaultDate > today() ? defaultDate : today(), start_time: '18:30', duration_min: 60, capacity: 10, location: 'L’espace des possibles, Miribel', color: '#8e3b6b' };
   modal(`
     <div class="modal-head"><h2>${s ? 'Modifier ou déplacer' : 'Ajouter une séance'}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-    ${!s ? '<p class="small muted">Séance supplémentaire, atelier, stage… Elle est ouverte à la réservation de tous les élèves. Pour un cours qui revient chaque semaine, utilisez « Cours réguliers ».</p>' : ''}
+    ${!s ? '<p class="small muted">Séance supplémentaire, atelier, stage… Elle est ouverte à la réservation de tous les élèves. Pour un cours qui revient chaque semaine, utilisez « Cours ».</p>' : ''}
     <form id="f">
       <div class="field"><label>Titre</label><input name="title" value="${esc(v.title)}" required></div>
       <div class="grid3">
@@ -1306,8 +1306,8 @@ function templateModal(t, after) {
         <div class="field" style="grid-column:span 2"><label>Lieu</label><input name="location" value="${esc(v.location)}" placeholder="Salle, adresse…"></div>
       </div>
       <div class="grid2">
-        <div class="field"><label>Premier cours à partir du</label><input name="start_date" type="date" value="${v.start_date}" required></div>
-        <div class="field"><label>Jusqu'au</label><input name="end_date" type="date" value="${v.end_date}" required></div>
+        <div class="field"><label>Début</label><input name="start_date" type="date" value="${v.start_date}" required></div>
+        <div class="field"><label>Fin</label><input name="end_date" type="date" value="${v.end_date}" required></div>
       </div>
       <div class="field"><label>Description <span class="muted">(visible par les élèves)</span></label><textarea name="description" rows="2">${esc(v.description)}</textarea></div>
       <div class="grid2">
