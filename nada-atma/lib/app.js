@@ -1242,7 +1242,16 @@ function createApp(db, opts = {}) {
     const role = body.role === 'admin' || body.role === 'member' ? body.role : u.role;
     const active = body.active === undefined ? u.active : (body.active ? 1 : 0);
     if (u.id === user.id && (role !== 'admin' || !active)) fail(400, 'Vous ne pouvez pas retirer vos propres droits');
-    q('UPDATE users SET role = ?, active = ? WHERE id = ?').run(role, active, u.id);
+    // Coordonnées modifiables par la professeure
+    const name = body.name !== undefined ? (str(body.name, 100) || fail(400, 'Le nom est obligatoire')) : u.name;
+    const phone = body.phone !== undefined ? str(body.phone, 30) : u.phone;
+    let email = u.email;
+    if (body.email !== undefined) {
+      email = str(body.email, 200).toLowerCase();
+      if (!isEmail(email)) fail(400, 'Adresse e-mail invalide');
+      if (q('SELECT 1 FROM users WHERE email = ? AND id != ?').get(email, u.id)) fail(409, 'Un autre compte utilise déjà cette adresse');
+    }
+    q('UPDATE users SET role = ?, active = ?, name = ?, email = ?, phone = ? WHERE id = ?').run(role, active, name, email, phone, u.id);
     if (!active) q('DELETE FROM auth_tokens WHERE user_id = ?').run(u.id);
     return { user: publicUser(q('SELECT * FROM users WHERE id = ?').get(u.id)) };
   }, 'admin');

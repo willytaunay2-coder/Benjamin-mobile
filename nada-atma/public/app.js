@@ -1563,7 +1563,17 @@ async function studentModal(u, templates, after) {
   const c = u.counts || { total: 0, month: 0, upcoming: 0, done: 0 };
   modal(`
     <div class="modal-head"><h2>${esc(u.name)}</h2>${CLOSE_X}</div>
-    <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : ''}</p>
+    <div class="contact" id="contact-view">
+      <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : '<br><span class="muted">Pas de téléphone</span>'}</p>
+      <button type="button" class="btn ghost small" id="contact-edit">Modifier</button>
+    </div>
+    <form class="contact-form" id="contact-form" hidden>
+      <div class="field"><label for="c-name">Prénom et nom</label><input id="c-name" value="${esc(u.name)}" required autocomplete="off"></div>
+      <div class="field"><label for="c-email">E-mail</label><input id="c-email" type="email" value="${esc(u.email)}" required autocomplete="off"></div>
+      <div class="field"><label for="c-phone">Téléphone</label><input id="c-phone" type="tel" value="${esc(u.phone || '')}" autocomplete="off"></div>
+      <p class="small muted">Si l’e-mail change, l’élève se connecte désormais avec la nouvelle adresse (même mot de passe).</p>
+      <div class="btn-row"><button class="btn small" id="contact-save">Enregistrer les coordonnées</button><button type="button" class="btn ghost small" id="contact-cancel">Annuler</button></div>
+    </form>
     ${dropIn ? `
     <div class="slot-now"><span class="small muted">Formule</span><div><strong>À la séance</strong></div></div>
     <div class="count-grid">
@@ -1593,6 +1603,19 @@ async function studentModal(u, templates, after) {
       <button class="btn secondary small" id="pw">Nouveau mot de passe</button>
       ${u.id !== state.user.id ? `<button class="btn ${u.active ? 'danger' : 'ok'} small" id="act">${u.active ? 'Désactiver' : 'Réactiver'}</button>` : ''}
     </div>`, (m, close) => {
+    const view = m.querySelector('#contact-view'), form = m.querySelector('#contact-form');
+    m.querySelector('#contact-edit').onclick = () => { view.hidden = true; form.hidden = false; m.querySelector('#c-name').focus(); };
+    m.querySelector('#contact-cancel').onclick = () => { form.hidden = true; view.hidden = false; };
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const body = { name: m.querySelector('#c-name').value, email: m.querySelector('#c-email').value, phone: m.querySelector('#c-phone').value };
+      try {
+        const r = await api(`/api/admin/users/${u.id}`, { method: 'PUT', body });
+        Object.assign(u, r.user);
+        toast('Coordonnées enregistrées');
+        close(); after && after();
+      } catch (err) { toast(err.message, true); }
+    };
     planToggle(m, m.querySelector('#slot-block'));
     m.querySelector('#save').onclick = async () => {
       const plan = (m.querySelector('input[name=plan]:checked') || {}).value === 'drop_in' ? 'drop_in' : 'annual';

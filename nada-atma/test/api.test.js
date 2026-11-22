@@ -356,10 +356,19 @@ test('la professeure crée un compte élève avec son créneau, le change, réin
   assert.match((await eve('GET', '/api/notifications')).data.notifications[0].body, /jeudi 12h15 à partir du lundi 14 septembre/);
   assert.equal((await admin('PUT', `/api/admin/users/${uid}/slot`, { template_id: mar.id, from: 'demain' })).status, 400);
 
+  // La professeure corrige les coordonnées ; l'élève se connecte avec la nouvelle adresse
+  r = await admin('PUT', `/api/admin/users/${uid}`, { name: 'Ève Martin', email: 'Eve.Martin@example.com', phone: '07 11 22 33 44' });
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.data.user.name, r.data.user.email, r.data.user.phone], ['Ève Martin', 'eve.martin@example.com', '07 11 22 33 44']);
+  assert.equal((await admin('PUT', `/api/admin/users/${uid}`, { email: 'prof@example.com' })).status, 409);
+  assert.equal((await admin('PUT', `/api/admin/users/${uid}`, { email: 'pas-une-adresse' })).status, 400);
+  assert.equal((await admin('PUT', `/api/admin/users/${uid}`, { name: '  ' })).status, 400);
+  assert.equal((await eve('PUT', `/api/admin/users/${uid}`, { name: 'X' })).status, 403);
+
   // Nouveau mot de passe : l'ancienne session est fermée
   r = await admin('POST', `/api/admin/users/${uid}/password`, { send_email: false });
   assert.equal((await eve('GET', '/api/me')).data.user, null);
-  assert.equal((await eve('POST', '/api/login', { email: 'eve@example.com', password: r.data.temp_password })).status, 200);
+  assert.equal((await eve('POST', '/api/login', { email: 'eve.martin@example.com', password: r.data.temp_password })).status, 200);
 });
 
 test('un cours par semaine : pas de deuxième inscription la même semaine', async (t) => {
