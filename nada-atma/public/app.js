@@ -828,6 +828,12 @@ async function sessionDetailModal(id, after) {
       const wm = e.target.closest('[data-wmove]');
       if (wm) {
         const ids = waiting.map((w) => w.id); const i = Number(wm.dataset.wmove), j = i + Number(wm.dataset.dir);
+        const who = waiting[i], other = waiting[j];
+        const ok = await confirmBox(j < i
+          ? `Faire passer <strong>${esc(who.name)}</strong> devant <strong>${esc(other.name)}</strong> sur la liste d’attente ?<br><span class="small muted">Si une place se libère, ${esc(who.name)} sera inscrit·e en premier.</span>`
+          : `Faire passer <strong>${esc(who.name)}</strong> après <strong>${esc(other.name)}</strong> sur la liste d’attente ?<br><span class="small muted">Si une place se libère, ${esc(other.name)} sera inscrit·e en premier.</span>`,
+          j < i ? 'Faire monter' : 'Faire descendre');
+        if (!ok) { sessionDetailModal(id, after); return; }
         [ids[i], ids[j]] = [ids[j], ids[i]];
         try { await api(`/api/admin/sessions/${id}/waitlist`, { method: 'PUT', body: { user_ids: ids } }); toast('Ordre de la liste modifié'); reopen(); }
         catch (err) { toast(err.message, true); }
@@ -835,6 +841,8 @@ async function sessionDetailModal(id, after) {
       }
       const wr = e.target.closest('[data-wremove]');
       if (wr) {
+        const who = waiting.find((w) => String(w.id) === wr.dataset.wremove);
+        if (!(await confirmBox(`Retirer <strong>${esc(who ? who.name : '')}</strong> de la liste d’attente ?<br><span class="small muted">Elle ou il ne sera pas prévenu·e si une place se libère.</span>`, 'Retirer', true))) { sessionDetailModal(id, after); return; }
         try { await api(`/api/admin/sessions/${id}/waitlist/remove`, { method: 'POST', body: { user_id: Number(wr.dataset.wremove) } }); toast('Retiré·e de la liste d’attente'); reopen(); }
         catch (err) { toast(err.message, true); }
         return;
@@ -861,6 +869,8 @@ async function sessionDetailModal(id, after) {
     if (addwait) addwait.onclick = async () => {
       const uid = m.querySelector('#addwait').value;
       if (!uid) return;
+      const who = users.find((u) => String(u.id) === uid);
+      if (!(await confirmBox(`Ajouter <strong>${esc(who ? who.name : '')}</strong> en fin de liste d’attente ?`, 'Ajouter'))) { sessionDetailModal(id, after); return; }
       try { await api(`/api/admin/sessions/${id}/waitlist`, { method: 'POST', body: { user_id: Number(uid) } }); toast('Ajouté·e à la liste d’attente'); reopen(); }
       catch (err) { toast(err.message, true); }
     };
