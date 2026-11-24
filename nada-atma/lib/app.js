@@ -407,7 +407,7 @@ function createApp(db, opts = {}) {
     return q('SELECT * FROM closures WHERE ? BETWEEN start_date AND end_date LIMIT 1').get(date);
   }
 
-  function generate(from, to, templateId = null) {
+  function generate(from, to, templateId = null, { inTx = false } = {}) {
     const skipHolidays = settings().skip_public_holidays === '1';
     const templates = templateId
       ? q('SELECT * FROM templates WHERE id = ? AND active = 1').all(templateId)
@@ -416,7 +416,7 @@ function createApp(db, opts = {}) {
       (template_id, title, description, date, start_time, duration_min, capacity, location, color)
       VALUES (?,?,?,?,?,?,?,?,?)`);
     let created = 0, skipped = 0;
-    tx(db, () => {
+    const run = () => {
       for (const t of templates) {
         let d = from > t.start_date ? from : t.start_date;
         const end = to < t.end_date ? to : t.end_date;
@@ -428,17 +428,34 @@ function createApp(db, opts = {}) {
           created += Number(r.changes);
         }
       }
-    });
+    };
+    if (inTx) run(); else tx(db, run);
     return { created, skipped };
   }
 
   // Applique une fermeture aux séances existantes
-  function applyClosure(c) {
-    const r = q(`UPDATE sessions SET cancelled = 1, cancel_reason = ?, closure_id = ?
-                 WHERE date BETWEEN ? AND ? AND cancelled = 0`).run(c.label, c.id, c.start_date, c.end_date);
+  function applyClosure(c, { notifyPeople = true } = {}) {
+    // Les séances ajoutées à la main pendant ces dates (cours exceptionnels) sont gardées
+    const targets = q(`SELECT id FROM sessions WHERE date BETWEEN ? AND ? AND cancelled = 0 AND template_id IS NOT NULL`).all(c.start_date, c.end_date).map((r) => r.id);
+    // Personnes qui avaient un cours prévu (à l'année ou place prise), pour les prévenir
+    const today = D.toISO(now());
+    const people = new Set();
+    for (const id of targets) {
+      const sess = getSession(id);
+      if (sess.date < today) continue;
+      for (const a of attendeesOf(id).attendees) people.add(a.id);
+    }
+    const up = q('UPDATE sessions SET cancelled = 1, cancel_reason = ?, closure_id = ? WHERE id = ?');
+    for (const id of targets) up.run(c.label, c.id, id);
     const { n } = q(`SELECT COUNT(*) n FROM bookings b JOIN sessions s ON s.id = b.session_id
                      WHERE s.closure_id = ? AND b.status = 'booked'`).get(c.id);
-    return { sessions_cancelled: Number(r.changes), bookings_affected: n };
+    // On prévient pour une fermeture proche (les vacances lointaines se voient sur le planning)
+    if (notifyPeople && people.size && c.start_date <= D.addDays(today, 30)) {
+      const period = c.start_date === c.end_date ? `le ${longDate(c.start_date)}` : `du ${longDate(c.start_date)} au ${longDate(c.end_date)}`;
+      notify([...people], { kind: 'cancel', title: `Pas de cours ${period}`, link: weekLink(c.start_date),
+        body: `${c.label} : pas de cours ${period}. Vos cours reprennent ensuite normalement.` });
+    }
+    return { sessions_cancelled: targets.length, bookings_affected: n, notified: people.size };
   }
 
   // ---------- Routes ----------
@@ -462,6 +479,8 @@ function createApp(db, opts = {}) {
     const r = q('INSERT INTO users(email, name, phone, password_hash, role) VALUES (?,?,?,?,?)')
       .run(email, name, phone, hashPassword(password), isFirst ? 'admin' : 'member');
     issueToken(res, Number(r.lastInsertRowid));
+    // La professeure voit arriver les comptes créés par les élèves eux-mêmes
+    if (!isFirst) notify(adminIds(), { kind: 'admin', title: `Nouveau compte : ${name}`, body: 'Compte créé depuis l’application. Choisissez sa formule (à l’année ou à la séance) dans Élèves.', link: '#/admin/membres' }, false);
     return { user: publicUser(q('SELECT * FROM users WHERE id = ?').get(r.lastInsertRowid)) };
   });
 
@@ -473,6 +492,33 @@ function createApp(db, opts = {}) {
     }
     issueToken(res, u.id);
     return { user: publicUser(u) };
+  });
+
+  // ---------- Mot de passe oublié ----------
+  route('POST', '/api/password/forgot', async ({ body }) => {
+    const email = str(body.email, 200).toLowerCase();
+    const u = isEmail(email) ? q('SELECT * FROM users WHERE email = ? AND active = 1').get(email) : null;
+    if (u) {
+      q('DELETE FROM password_resets WHERE user_id = ? OR expires_at < ?').run(u.id, Date.now());
+      const token = crypto.randomBytes(24).toString('hex');
+      q('INSERT INTO password_resets(token, user_id, expires_at) VALUES (?,?,?)').run(token, u.id, Date.now() + 3600 * 1000);
+      const studio = settings().studio_name || 'Nada Atma';
+      mailer.sendLater([{ to: u.email, subject: `${studio} — choisir un nouveau mot de passe`,
+        text: `Bonjour ${firstName(u.name)},\n\nPour choisir un nouveau mot de passe, ouvrez ce lien (valable une heure) :\n${appUrl}/#/nouveau-mot-de-passe?jeton=${token}\n\nSi vous n’avez rien demandé, ignorez simplement ce message.\n\n${studio}` }]);
+    }
+    // Même réponse dans tous les cas : on ne révèle pas quelles adresses ont un compte
+    return { ok: true };
+  });
+  route('POST', '/api/password/reset', async ({ body, res }) => {
+    const row = q('SELECT * FROM password_resets WHERE token = ?').get(str(body.token, 100));
+    if (!row || row.expires_at < Date.now()) fail(400, 'Ce lien n’est plus valable. Demandez-en un nouveau.');
+    const pw = typeof body.password === 'string' ? body.password : '';
+    if (pw.length < 8) fail(400, 'Le mot de passe doit contenir au moins 8 caractères');
+    q('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(pw), row.user_id);
+    q('DELETE FROM password_resets WHERE user_id = ?').run(row.user_id);
+    q('DELETE FROM auth_tokens WHERE user_id = ?').run(row.user_id);
+    issueToken(res, row.user_id);
+    return { user: publicUser(q('SELECT * FROM users WHERE id = ?').get(row.user_id)) };
   });
 
   route('POST', '/api/logout', async ({ req, res }) => {
@@ -925,20 +971,62 @@ function createApp(db, opts = {}) {
   }, 'admin');
 
   route('PUT', '/api/admin/templates/:id', async ({ params, body }) => {
-    const existing = q('SELECT * FROM templates WHERE id = ?').get(params.id) || fail(404, 'Cours introuvable');
-    const f = templateFields(body, existing);
+    const old = q('SELECT * FROM templates WHERE id = ?').get(params.id) || fail(404, 'Cours introuvable');
+    const f = templateFields(body, old);
     if (f.end_date < f.start_date) fail(400, 'La date de fin doit être après la date de début');
-    q(`UPDATE templates SET title=?, description=?, weekday=?, start_time=?, duration_min=?, capacity=?, location=?, color=?, start_date=?, end_date=?, active=? WHERE id=?`)
-      .run(f.title, f.description, f.weekday, f.start_time, f.duration_min, f.capacity, f.location, f.color, f.start_date, f.end_date, f.active, existing.id);
-    // Répercute les changements sur les séances futures (hors changement de jour)
-    let updated = 0;
-    if (body.apply_to_future !== false) {
-      const r = q(`UPDATE sessions SET title=?, description=?, start_time=?, duration_min=?, capacity=?, location=?, color=?
-                   WHERE template_id = ? AND date >= ?`)
-        .run(f.title, f.description, f.start_time, f.duration_min, f.capacity, f.location, f.color, existing.id, D.toISO(now()));
-      updated = Number(r.changes);
-    }
-    return { template: q('SELECT * FROM templates WHERE id = ?').get(existing.id), sessions_updated: updated };
+    const enrolled = activeEnrolledCount(old.id);
+    if (f.capacity < enrolled) fail(409, `${enrolled} élèves sont inscrit·es à l’année sur ce cours : il faut au moins ${enrolled} places.`);
+    const today = D.toISO(now());
+    // Date à partir de laquelle le changement s'applique (aujourd'hui par défaut)
+    const from = body.from ? reqDate(body.from, 'Date du changement') : today;
+    if (from < today) fail(400, 'La date du changement ne peut pas être passée');
+    return tx(db, () => {
+      q(`UPDATE templates SET title=?, description=?, weekday=?, start_time=?, duration_min=?, capacity=?, location=?, color=?, start_date=?, end_date=?, active=? WHERE id=?`)
+        .run(f.title, f.description, f.weekday, f.start_time, f.duration_min, f.capacity, f.location, f.color, f.start_date, f.end_date, f.active, old.id);
+      const t = q('SELECT * FROM templates WHERE id = ?').get(old.id);
+      const dayChanged = f.weekday !== old.weekday;
+      // 1. Les séances à venir prennent les nouveaux réglages
+      const updated = Number(q(`UPDATE sessions SET title=?, description=?, start_time=?, duration_min=?, capacity=?, location=?, color=?
+                                WHERE template_id = ? AND date >= ?`)
+        .run(f.title, f.description, f.start_time, f.duration_min, f.capacity, f.location, f.color, t.id, from).changes);
+      // 2. Nouvelles séances (nouveau jour, période prolongée, cours réactivé), hors vacances
+      const gen = f.active ? generate(from > f.start_date ? from : f.start_date, f.end_date, t.id, { inTx: true }) : { created: 0 };
+      // 3. Séances qui n'ont plus lieu d'être : ancien jour, hors période, cours désactivé
+      const stale = q(`SELECT id, date FROM sessions WHERE template_id = ? AND date >= ?`).all(t.id, from)
+        .filter((x) => !f.active || x.date < f.start_date || x.date > f.end_date || D.weekday(x.date) !== f.weekday);
+      let moved = 0, dropped = 0;
+      for (const x of stale) {
+        const old_s = getSession(x.id);
+        // Places prises et liste d'attente : reportées sur la nouvelle séance de la même semaine si elle existe
+        const mon = D.addDays(x.date, -((D.weekday(x.date) + 6) % 7));
+        const target = dayChanged && f.active
+          ? q('SELECT id, date FROM sessions WHERE template_id = ? AND date BETWEEN ? AND ? AND date >= ? AND date <= ? AND cancelled = 0')
+            .all(t.id, mon, D.addDays(mon, 6), from, f.end_date).find((y) => y.id !== x.id && D.weekday(y.date) === f.weekday) || null
+          : null;
+        for (const b of q("SELECT * FROM bookings WHERE session_id = ? AND status = 'booked'").all(x.id)) {
+          const tgt = target ? getSession(target.id) : null;
+          if (tgt && !statusOf(tgt, b.user_id).status && occupiedOf(tgt) < tgt.capacity) {
+            q('UPDATE bookings SET session_id = ? WHERE id = ?').run(tgt.id, b.id); moved++;
+          } else {
+            q("UPDATE bookings SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?").run(b.id); dropped++;
+            notify([b.user_id], { kind: 'cancel', title: `Séance annulée : ${longDate(x.date)} à ${hhmm(old_s.start_time)}`, link: weekLink(x.date),
+              body: `Le cours « ${old_s.title} » du ${longDate(x.date)} n’a plus lieu. Votre place est annulée : inscrivez-vous sur un autre cours si vous le souhaitez.` });
+          }
+        }
+        if (target) q('UPDATE OR IGNORE waitlist SET session_id = ? WHERE session_id = ?').run(target.id, x.id);
+        q('DELETE FROM sessions WHERE id = ?').run(x.id);
+      }
+      // 4. Les inscrit·es à l'année sont prévenu·es d'un changement de jour, d'heure ou de lieu
+      let notified = 0;
+      const changed = dayChanged || f.start_time !== old.start_time || f.location !== old.location;
+      if (changed && f.active && body.notify !== false) {
+        const ids = q('SELECT user_id FROM enrollments WHERE template_id = ? AND (end_date IS NULL OR end_date >= ?)').all(t.id, from).map((r) => r.user_id);
+        notified = ids.length;
+        notify(ids, { kind: 'move', title: `Votre cours change : ${DAY_NAMES[f.weekday]} ${hhmm(f.start_time)}`, link: weekLink(from),
+          body: `À partir du ${longDate(from)}, votre cours « ${f.title} » a lieu le ${DAY_NAMES[f.weekday]} à ${hhmm(f.start_time)}${f.location ? ` (${f.location})` : ''}.` });
+      }
+      return { template: t, sessions_updated: updated, sessions_created: gen.created, sessions_removed: stale.length, bookings_moved: moved, bookings_cancelled: dropped, notified };
+    });
   }, 'admin');
 
   route('DELETE', '/api/admin/templates/:id', async ({ params, query }) => {
@@ -986,7 +1074,10 @@ function createApp(db, opts = {}) {
       // rétablit les séances annulées par cette fermeture
       const r = q(`UPDATE sessions SET cancelled = 0, cancel_reason = '', closure_id = NULL WHERE closure_id = ?`).run(c.id);
       q('DELETE FROM closures WHERE id = ?').run(c.id);
-      return { ok: true, sessions_restored: Number(r.changes) };
+      // Les cours qui n'avaient jamais été créés sur ces dates le sont maintenant
+      const from = c.start_date > D.toISO(now()) ? c.start_date : D.toISO(now());
+      const gen = from <= c.end_date ? generate(from, c.end_date, null, { inTx: true }) : { created: 0 };
+      return { ok: true, sessions_restored: Number(r.changes) + gen.created };
     });
   }, 'admin');
 
@@ -1155,7 +1246,7 @@ function createApp(db, opts = {}) {
         ...publicUser(u), upcoming: u.upcoming, credits: creditsFor(u.id), counts: sessionCounts(u.id),
         slot_ids: enrollmentsOf(u.id).map((e) => e.template_id),
         enrollments: enrollmentsOf(u.id).map((e) => ({ template_id: e.template_id, start_date: e.start_date, end_date: e.end_date })),
-        slots: enrollmentsOf(u.id).map((e) => `${['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'][e.weekday]} ${e.start_time.replace(':', 'h')} ${e.title}`),
+        slots: enrollmentsOf(u.id).map((e) => `${['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'][e.weekday]} ${hhmm(e.start_time)}${e.title !== 'Cours de yoga' ? ` · ${e.title}` : ''}`),
       })),
   }), 'admin');
 

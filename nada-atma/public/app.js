@@ -219,6 +219,8 @@ function setHashParams(base, params) {
 const ROUTES = {
   '#/planning': viewPlanning,
   '#/connexion': viewLogin,
+  '#/mot-de-passe-oublie': viewForgot,
+  '#/nouveau-mot-de-passe': viewReset,
   '#/inscription': viewRegister,
   '#/mes-reservations': viewPlanning, // anciens liens
   '#/mon-creneau': viewPlanning,
@@ -383,8 +385,8 @@ function weekHtml(from, data, { admin = false } = {}) {
     if (!list.length && !closure) continue; // on n'affiche que les jours de cours (ou de fermeture)
     const dayOn = list.filter((s) => !s.cancelled);
     const dayRate = admin && dayOn.length ? `<span class="day-rate">${pctOf(dayOn.reduce((a, s) => a + s.occupied, 0), dayOn.reduce((a, s) => a + s.capacity, 0))} %</span>` : '';
-    html += `<section class="day"><h3 class="day-title ${d === today() ? 'today' : ''}">${fmtLong(d)}${dayRate}${admin && list.length ? `<a class="print-link" href="#/admin/appel?date=${d}" aria-label="Imprimer la feuille d’appel du ${fmtLong(d)}"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/></svg>Appel</a>` : ''}</h3>`;
-    if (closure) html += `<div class="closure-banner"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z"/><path d="M5 19l7-7"/></svg><span><strong>${esc(closure.label)}</strong> — pas de cours</span></div>`;
+    html += `<section class="day"><h3 class="day-title ${d === today() ? 'today' : ''} ${admin ? 'adm' : ''}">${fmtLong(d)}${dayRate}${admin && list.length ? `<a class="print-link" href="#/admin/appel?date=${d}" aria-label="Imprimer la feuille d’appel du ${fmtLong(d)}"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/></svg>Appel</a>` : ''}</h3>`;
+    if (closure) html += `<div class="closure-banner"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z"/><path d="M5 19l7-7"/></svg><span><strong>${esc(closure.label)}</strong> — ${list.some((x) => !x.cancelled) ? 'cours exceptionnel ce jour-là' : 'pas de cours'}</span></div>`;
     if (list.length) html += list.map((s) => sessionCard(s, { admin })).join('');
     else if (!closure) html += '<div class="day-empty">Pas de séance</div>';
     html += '</section>';
@@ -513,7 +515,7 @@ async function viewPlanning() {
       <h1>${fmt(from, { day: 'numeric', month: 'short' })} – ${fmt(to, { day: 'numeric', month: 'short', year: 'numeric' })}</h1>
       <button class="icon-btn" id="next" aria-label="Semaine suivante"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
       <button class="btn secondary small" id="now">Aujourd'hui</button>
-      <input type="date" id="jump" value="${from}" style="width:auto" aria-label="Aller à la date">
+      <input type="date" id="jump" class="jump-date" value="${from}" style="width:auto" aria-label="Aller à la date">
     </div>
     ${filtersHtml(data.sessions)}
     ${weekHtml(from, data)}
@@ -637,6 +639,73 @@ async function viewAlerts() {
       </div>`).join('')}</div>` : '<div class="empty"><div class="big"></div>Aucune alerte pour le moment.<br>Vous serez prévenu·e ici dès qu’une place se libère.</div>'}`;
 }
 
+// Champ mot de passe avec « Afficher »
+function pwField(id, name, autocomplete, label, extra = '') {
+  return `<div class="field"><label for="${id}">${label}</label><div class="pw-wrap"><input id="${id}" name="${name}" type="password" autocomplete="${autocomplete}" autocapitalize="off" autocorrect="off" spellcheck="false" ${extra} required>
+    <button type="button" class="pw-toggle" data-pw="${id}" aria-label="Afficher le mot de passe">Afficher</button></div></div>`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-pw]');
+  if (!b) return;
+  const i = document.getElementById(b.dataset.pw);
+  const show = i.type === 'password';
+  i.type = show ? 'text' : 'password';
+  b.textContent = show ? 'Masquer' : 'Afficher';
+  b.setAttribute('aria-label', show ? 'Masquer le mot de passe' : 'Afficher le mot de passe');
+});
+
+// Mot de passe oublié : demande du lien
+function viewForgot() {
+  $view.innerHTML = `
+    <div class="auth">
+      <div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p></div>
+      <form class="card" id="f">
+        <h2>Mot de passe oublié</h2>
+        <p class="small muted">Indiquez votre e-mail : vous recevrez un lien pour choisir un nouveau mot de passe.</p>
+        <div class="field"><label for="email">E-mail</label><input id="email" name="email" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="email" required></div>
+        <div class="error" id="err"></div>
+        <button class="btn block">Recevoir le lien</button>
+        <p class="center small" style="margin-top:14px"><a href="#/connexion">Retour à la connexion</a></p>
+      </form>
+    </div>`;
+  const f = $view.querySelector('#f');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = f.querySelector('.btn'); btn.disabled = true;
+    try {
+      await api('/api/password/forgot', { method: 'POST', body: formData(f) });
+      f.innerHTML = `<h2>Regardez vos e-mails</h2><p>Si un compte existe pour <strong>${esc(f.email ? f.email.value : '')}</strong>, un e-mail vient de partir avec un lien pour choisir un nouveau mot de passe (valable une heure).</p>
+        <p class="small muted">Rien reçu ? Vérifiez les courriers indésirables, ou demandez à votre professeure.</p><a class="btn block secondary" href="#/connexion">Retour à la connexion</a>`;
+    } catch (err) { f.querySelector('#err').textContent = err.message; btn.disabled = false; }
+  };
+}
+
+// Nouveau mot de passe depuis le lien reçu par e-mail
+function viewReset() {
+  const token = hashParams().jeton || '';
+  $view.innerHTML = `
+    <div class="auth">
+      <div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p></div>
+      <form class="card" id="f">
+        <h2>Nouveau mot de passe</h2>
+        ${pwField('np', 'password', 'new-password', 'Choisissez un mot de passe', 'minlength="8"')}
+        <p class="small muted">8 caractères au moins.</p>
+        <div class="error" id="err"></div>
+        <button class="btn block">Enregistrer</button>
+      </form>
+    </div>`;
+  const f = $view.querySelector('#f');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api('/api/password/reset', { method: 'POST', body: { token, password: f.querySelector('#np').value } });
+      state.user = r.user; await refreshMe();
+      toast('Mot de passe enregistré');
+      location.hash = '#/planning';
+    } catch (err) { f.querySelector('#err').innerHTML = `${esc(err.message)} <a href="#/mot-de-passe-oublie">Recevoir un nouveau lien</a>`; }
+  };
+}
+
 function viewLogin() {
   if (state.user) { location.hash = '#/planning'; return; }
   $view.innerHTML = `
@@ -644,8 +713,9 @@ function viewLogin() {
       <div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p></div>
       <form class="card" id="f">
         <h2>Connexion</h2>
-        <div class="field"><label for="email">E-mail</label><input id="email" name="email" type="email" autocomplete="email" required></div>
-        <div class="field"><label for="password">Mot de passe</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
+        <div class="field"><label for="email">E-mail</label><input id="email" name="email" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="email" required></div>
+        ${pwField('password', 'password', 'current-password', 'Mot de passe')}
+        <p class="forgot"><a href="#/mot-de-passe-oublie">Mot de passe oublié ?</a></p>
         <div class="error" id="err"></div>
         <button class="btn block">Se connecter</button>
         <p class="center small" style="margin-top:14px">Pas encore de compte ? <a href="#/inscription">Créer un compte</a></p>
@@ -671,9 +741,9 @@ function viewRegister() {
       <form class="card" id="f">
         <h2>Créer mon compte</h2>
         <div class="field"><label for="name">Prénom et nom</label><input id="name" name="name" autocomplete="name" required></div>
-        <div class="field"><label for="email">E-mail</label><input id="email" name="email" type="email" autocomplete="email" required></div>
-        <div class="field"><label for="phone">Téléphone <span class="muted">(facultatif)</span></label><input id="phone" name="phone" type="tel" autocomplete="tel"></div>
-        <div class="field"><label for="password">Mot de passe <span class="muted">(8 caractères min.)</span></label><input id="password" name="password" type="password" minlength="8" autocomplete="new-password" required></div>
+        <div class="field"><label for="email">E-mail</label><input id="email" name="email" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="email" required></div>
+        <div class="field"><label for="phone">Téléphone <span class="muted">(facultatif)</span></label><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel"></div>
+        ${pwField('password', 'password', 'new-password', 'Mot de passe <span class="muted">(8 caractères min.)</span>', 'minlength="8"')}
         <div class="error" id="err"></div>
         <button class="btn block">Créer mon compte</button>
         <p class="center small" style="margin-top:14px">Déjà inscrit·e ? <a href="#/connexion">Se connecter</a></p>
@@ -701,7 +771,7 @@ function viewProfile() {
       <div class="field"><label>E-mail</label><input value="${esc(u.email)}" disabled></div>
       <div class="grid2">
         <div class="field"><label for="name">Nom</label><input id="name" name="name" value="${esc(u.name)}" required></div>
-        <div class="field"><label for="phone">Téléphone</label><input id="phone" name="phone" type="tel" value="${esc(u.phone)}"></div>
+        <div class="field"><label for="phone">Téléphone</label><input id="phone" name="phone" type="tel" inputmode="tel" value="${esc(u.phone)}"></div>
       </div>
       <fieldset class="field notify-set"><legend>Être prévenu·e aussi (places libres, cours déplacés ou ajoutés)</legend>
         <label class="check"><input type="checkbox" name="notify_email" ${u.notify_email !== false ? 'checked' : ''}>Par e-mail</label>
@@ -903,7 +973,7 @@ async function sessionDetailModal(id, after) {
 }
 
 function editSessionModal(s, after, defaultDate) {
-  const v = s || { title: '', description: '', date: defaultDate && defaultDate > today() ? defaultDate : today(), start_time: '18:30', duration_min: 60, capacity: 10, location: 'L’espace des possibles, Miribel', color: '#8e3b6b' };
+  const v = s || { title: 'Cours de yoga', description: '', date: defaultDate && defaultDate > today() ? defaultDate : today(), start_time: '18:30', duration_min: 60, capacity: 10, location: 'L’espace des possibles, Miribel', color: '#8e3b6b' };
   modal(`
     <div class="modal-head"><h2>${s ? 'Modifier ou déplacer' : 'Ajouter une séance'}</h2><button class="icon-btn" data-close aria-label="Fermer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     ${!s ? '<p class="small muted">Séance supplémentaire, atelier, stage… Elle est ouverte à la réservation de tous les élèves. Pour un cours qui revient chaque semaine, utilisez « Cours ».</p>' : ''}
@@ -923,6 +993,19 @@ function editSessionModal(s, after, defaultDate) {
       <button class="btn block">${s ? 'Enregistrer' : 'Créer la séance'}</button>
     </form>`, (m, close) => {
     const f = m.querySelector('#f');
+    // Date pendant des vacances : on le signale (la séance sera bien proposée)
+    const hint = document.createElement('p'); hint.className = 'small holiday-hint'; hint.hidden = true;
+    f.querySelector('input[name=date]').closest('.grid3').after(hint);
+    let closuresCache = null;
+    const checkDate = async () => {
+      try { closuresCache = closuresCache || (await api('/api/admin/closures')).closures; } catch { return; }
+      const d = f.querySelector('input[name=date]').value;
+      const c = closuresCache.find((k) => k.start_date <= d && k.end_date >= d);
+      hint.hidden = !c;
+      if (c) hint.textContent = `Pendant « ${c.label} » : ce cours sera bien proposé aux élèves, comme cours exceptionnel.`;
+    };
+    f.querySelector('input[name=date]').addEventListener('change', checkDate);
+    checkDate();
     f.onsubmit = async (e) => {
       e.preventDefault();
       try {
@@ -1246,23 +1329,8 @@ async function viewAdminTemplates() {
           <button class="btn secondary small" data-edit="${t.id}">Modifier</button>
         </div>
       </div>`).join('')}</div>` : `<div class="empty card"><div class="big"></div>Aucun cours pour l'instant.<br>Commencez par créer vos cours de la semaine (ex. « Hatha yoga — mardi 18h30 »).</div>`}
-    ${templates.length ? `
-    <div class="card">
-      <h2>Prolonger le planning</h2>
-      <p class="small muted">Recrée les séances manquantes sur une période (utile après avoir prolongé la date de fin d'un cours ou supprimé une fermeture). Les séances existantes ne sont pas dupliquées.</p>
-      <form id="gen" class="grid3">
-        <div class="field"><label>Du</label><input type="date" name="from" value="${today()}" required></div>
-        <div class="field"><label>Au</label><input type="date" name="to" value="${addDays(today(), 365)}" required></div>
-        <div class="field"><label>&nbsp;</label><button class="btn block">Générer</button></div>
-      </form>
-    </div>` : ''}`;
+    <p class="small muted">Les séances suivent automatiquement les cours : vacances et jours fériés sautés, période prolongée ou raccourcie.</p>`;
   $view.querySelector('#add').onclick = () => templateModal(null, viewAdminTemplates);
-  const gen = $view.querySelector('#gen');
-  if (gen) gen.onsubmit = async (e) => {
-    e.preventDefault();
-    try { const r = await api('/api/admin/generate', { method: 'POST', body: formData(gen) }); toast(`${plural(r.created, 'séance')} créée${r.created > 1 ? 's' : ''}`); viewAdminTemplates(); }
-    catch (err) { toast(err.message, true); }
-  };
   $view.onclick = (e) => {
     const b = e.target.closest('[data-edit]');
     if (b) templateModal(templates.find((t) => String(t.id) === b.dataset.edit), viewAdminTemplates);
@@ -1309,10 +1377,10 @@ function templateModal(t, after) {
     <form id="f">
       <div class="field"><label>Nom du cours</label><input name="title" value="${esc(v.title)}" placeholder="Hatha yoga, Yoga doux, Méditation…" required></div>
       <div class="grid3">
-        <div class="field"><label>Jour</label><select name="weekday" ${t ? 'disabled' : ''}>${[1, 2, 3, 4, 5, 6, 0].map((i) => `<option value="${i}" ${i === v.weekday ? 'selected' : ''}>${DAYS[i]}</option>`).join('')}</select></div>
+        <div class="field"><label>Jour</label><select name="weekday">${[1, 2, 3, 4, 5, 6, 0].map((i) => `<option value="${i}" ${i === v.weekday ? 'selected' : ''}>${DAYS[i]}</option>`).join('')}</select></div>
         <div class="field"><label>Heure</label><input name="start_time" type="time" value="${v.start_time}" required></div>
         <div class="field"><label>Durée (min)</label><input name="duration_min" type="number" min="5" value="${v.duration_min}" required></div>
-        <div class="field"><label>Places</label><input name="capacity" type="number" min="1" value="${v.capacity}" required></div>
+        <div class="field"><label>Places</label><input name="capacity" type="number" inputmode="numeric" min="${t && t.enrolled ? t.enrolled : 1}" value="${v.capacity}" required></div>
         <div class="field" style="grid-column:span 2"><label>Lieu</label><input name="location" value="${esc(v.location)}" placeholder="Salle, adresse…"></div>
       </div>
       <div class="grid2">
@@ -1324,7 +1392,11 @@ function templateModal(t, after) {
         <div class="field"><label>Couleur</label><input name="color" type="color" value="${v.color}"></div>
         ${t ? `<div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" name="active" ${v.active ? 'checked' : ''}>Cours actif</label></div>` : ''}
       </div>
-      ${t ? '<p class="small muted">Les modifications (heure, places, lieu…) s\'appliquent aussi aux séances à venir déjà créées. Pour changer de jour, créez un nouveau cours.</p>' : '<p class="small muted">Les séances sont créées automatiquement sur toute la période, hors vacances et jours fériés.</p>'}
+      ${t ? `<div class="change-box">
+        <div class="grid2"><div class="field"><label for="t-from">Changements à partir du</label><input id="t-from" name="from" type="date" value="${today()}" min="${today()}"></div><div></div></div>
+        <label class="check"><input type="checkbox" name="notify" checked>Prévenir les élèves inscrit·es si le jour, l’heure ou le lieu change</label>
+        <p class="small muted">Les séances à venir suivent automatiquement : nouveau jour, nouvelle heure, période prolongée ou raccourcie, toujours hors vacances. Les places déjà prises sont reportées sur le nouveau jour de la même semaine.</p>
+      </div>` : '<p class="small muted">Les séances sont créées automatiquement sur toute la période, hors vacances et jours fériés.</p>'}
       <div class="error" id="err"></div>
       <div class="btn-row">
         <button class="btn" style="flex:1">${t ? 'Enregistrer' : 'Créer le cours et le planning'}</button>
@@ -1336,13 +1408,16 @@ function templateModal(t, after) {
       e.preventDefault();
       const body = formData(f);
       body.weekday = Number(body.weekday ?? v.weekday);
-      if (t) { body.weekday = v.weekday; if (body.active === undefined) body.active = true; }
+      if (t && body.active === undefined) body.active = true;
       try {
         if (t) {
           const r = await api(`/api/admin/templates/${t.id}`, { method: 'PUT', body });
-          // prolonge si la date de fin a été repoussée
-          if (body.active && body.end_date > t.end_date) await api('/api/admin/generate', { method: 'POST', body: { from: t.end_date, to: body.end_date, template_id: t.id } });
-          toast(`Cours mis à jour (${plural(r.sessions_updated, 'séance')} à venir modifiée${r.sessions_updated > 1 ? 's' : ''})`);
+          const bits = [];
+          if (r.sessions_created) bits.push(`${plural(r.sessions_created, 'séance')} ajoutée${r.sessions_created > 1 ? 's' : ''}`);
+          if (r.sessions_removed) bits.push(`${plural(r.sessions_removed, 'séance')} retirée${r.sessions_removed > 1 ? 's' : ''}`);
+          if (r.bookings_moved) bits.push(`${plural(r.bookings_moved, 'place')} reportée${r.bookings_moved > 1 ? 's' : ''}`);
+          if (r.notified) bits.push(`${plural(r.notified, 'élève')} prévenu·e${r.notified > 1 ? 's' : ''}`);
+          toast(`Cours enregistré${bits.length ? ' · ' + bits.join(' · ') : ''}`);
         } else {
           const r = await api('/api/admin/templates', { method: 'POST', body });
           toast(`Cours créé : ${plural(r.generated.created, 'séance')} programmée${r.generated.created > 1 ? 's' : ''}`);
@@ -1370,18 +1445,18 @@ async function viewAdminClosures() {
     <div class="list-item">
       <div class="grow"><strong>${esc(c.label)}</strong>
         <div class="small muted">${c.start_date === c.end_date ? fmtFull(c.start_date) : `Du ${fmtFull(c.start_date)} au ${fmtFull(c.end_date)}`}${c.sessions_cancelled ? ` · ${plural(c.sessions_cancelled, 'séance')} annulée${c.sessions_cancelled > 1 ? 's' : ''}` : ''}</div></div>
-      <button class="btn ghost small" data-del="${c.id}">Supprimer</button>
+      <span class="btn-row tight">${c.end_date >= today() ? `<button class="btn secondary small" data-extra="${c.id}">+ Cours exceptionnel</button>` : ''}<button class="btn ghost small" data-del="${c.id}">Supprimer</button></span>
     </div>`;
   $view.innerHTML = `
     ${adminNav('#/admin/fermetures')}
     <h1>Vacances & fermetures</h1>
-    <p class="muted small">Aucune séance n'est proposée pendant ces périodes. Ajouter une période annule les séances déjà créées ; la supprimer les rétablit.</p>
+    <p class="muted small">Pendant ces périodes, les cours habituels n’ont pas lieu (les élèves concerné·es sont prévenu·es si c’est dans le mois). Pour proposer quand même un cours pendant des vacances : « + Cours exceptionnel », ou « Rétablir la séance » sur un cours dans le planning. Supprimer une période remet les cours.</p>
     <form class="card" id="f">
       <h2>Ajouter une période</h2>
       <div class="field"><label>Nom</label><input name="label" placeholder="Vacances de Noël, stage, congés…" required></div>
       <div class="grid2">
-        <div class="field"><label>Premier jour sans cours</label><input type="date" name="start_date" required></div>
-        <div class="field"><label>Dernier jour sans cours</label><input type="date" name="end_date" required></div>
+        <div class="field"><label>Du</label><input type="date" name="start_date" required></div>
+        <div class="field"><label>Au (inclus)</label><input type="date" name="end_date" required></div>
       </div>
       <div class="error" id="err"></div>
       <button class="btn">Ajouter</button>
@@ -1436,9 +1511,15 @@ async function viewAdminClosures() {
     } catch (err) { box.innerHTML = `<p class="error">${esc(err.message)}</p>`; }
   };
   $view.onclick = async (e) => {
+    const x = e.target.closest('[data-extra]');
+    if (x) {
+      const c = closures.find((k) => String(k.id) === x.dataset.extra);
+      editSessionModal(null, viewAdminClosures, c.start_date > today() ? c.start_date : today());
+      return;
+    }
     const d = e.target.closest('[data-del]');
     if (!d) return;
-    if (!(await confirmBox('Supprimer cette période ? Les séances annulées par elle seront rétablies.', 'Supprimer'))) return;
+    if (!(await confirmBox('Supprimer cette période ? Les cours habituels reprendront sur ces dates.', 'Supprimer'))) return;
     try { const r = await api(`/api/admin/closures/${d.dataset.del}`, { method: 'DELETE' }); toast(`Période supprimée${r.sessions_restored ? ` · ${plural(r.sessions_restored, 'séance')} rétablie${r.sessions_restored > 1 ? 's' : ''}` : ''}`); viewAdminClosures(); }
     catch (err) { toast(err.message, true); }
   };
@@ -1456,19 +1537,26 @@ function slotOptions(templates, current) {
   return `<option value="">Pas de créneau pour l’instant</option>${opts.join('')}`;
 }
 
-function passwordModal(name, email, pw, sent) {
+function passwordModal(name, email, pw, sent, onAnother) {
+  const first = String(name).trim().split(/\s+/)[0];
+  const message = `Bonjour ${first}, voici ton accès à l’application Nada Atma pour tes cours de yoga :\nE-mail : ${email}\nMot de passe provisoire : ${pw}\n${location.origin}`;
   modal(`
     <div class="modal-head"><h2>Compte prêt</h2>${CLOSE_X}</div>
     <p>Identifiants de <strong>${esc(name)}</strong> :</p>
     <div class="cred"><div><span class="small muted">E-mail</span><strong>${esc(email)}</strong></div>
       <div><span class="small muted">Mot de passe provisoire</span><strong class="pw">${esc(pw)}</strong></div></div>
-    <p class="small muted">${sent ? 'Ces identifiants viennent d’être envoyés par e-mail.' : 'Transmettez-les à l’élève.'} Le mot de passe pourra être changé dans son profil.</p>
-    <div class="btn-row" style="justify-content:flex-end">
-      <button class="btn secondary" id="copy">Copier</button><button class="btn" data-close>Terminé</button></div>`, (m) => {
+    <p class="small muted">${sent ? 'Ces identifiants viennent d’être envoyés par e-mail.' : 'Transmettez-les à l’élève.'} Vous pouvez aussi les lui envoyer par SMS ou WhatsApp avec « Partager ». Le mot de passe pourra être changé dans son profil.</p>
+    <div class="btn-row">
+      ${navigator.share ? '<button class="btn secondary" id="share">Partager</button>' : ''}<button class="btn secondary" id="copy">Copier</button>
+      ${onAnother ? '<button class="btn secondary" id="another">+ Créer un autre élève</button>' : ''}<button class="btn" data-close>Terminé</button></div>`, (m) => {
     m.querySelector('#copy').onclick = async () => {
-      try { await navigator.clipboard.writeText(`Nada Atma\nE-mail : ${email}\nMot de passe : ${pw}\n${location.origin}`); toast('Copié'); }
+      try { await navigator.clipboard.writeText(message); toast('Copié : collez-le dans un SMS ou un e-mail'); }
       catch { toast('Copie impossible : notez le mot de passe', true); }
     };
+    const sh = m.querySelector('#share');
+    if (sh) sh.onclick = async () => { try { await navigator.share({ title: 'Nada Atma', text: message }); } catch { /* partage annulé */ } };
+    const an = m.querySelector('#another');
+    if (an) an.onclick = () => onAnother();
   });
 }
 
@@ -1488,9 +1576,9 @@ function newStudentModal(templates) {
   modal(`
     <div class="modal-head"><h2>Nouvel élève</h2>${CLOSE_X}</div>
     <form id="f">
-      <div class="field"><label for="n-name">Prénom et nom</label><input id="n-name" name="name" required autocomplete="off"></div>
-      <div class="field"><label for="n-email">E-mail</label><input id="n-email" name="email" type="email" required autocomplete="off"></div>
-      <div class="field"><label for="n-phone">Téléphone</label><input id="n-phone" name="phone" type="tel" autocomplete="off"></div>
+      <div class="field"><label for="n-name">Prénom et nom</label><input id="n-name" name="name" required autocomplete="off" autocapitalize="words"></div>
+      <div class="field"><label for="n-email">E-mail</label><input id="n-email" name="email" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" required autocomplete="off"></div>
+      <div class="field"><label for="n-phone">Téléphone</label><input id="n-phone" name="phone" type="tel" inputmode="tel" autocomplete="off"></div>
       <fieldset class="field plan-set"><legend>Formule</legend>
         <label class="radio-card on"><input type="radio" name="plan" value="annual" checked><span><strong>À l’année</strong><span class="small muted">Un cours fixe chaque semaine.</span></span></label>
         <label class="radio-card"><input type="radio" name="plan" value="drop_in"><span><strong>À la séance</strong><span class="small muted">S’inscrit aux cours de son choix ; ses séances sont comptées.</span></span></label>
@@ -1510,7 +1598,7 @@ function newStudentModal(templates) {
         const r = await api('/api/admin/users', { method: 'POST', body });
         close();
         await viewAdminUsers();
-        passwordModal(r.user.name, r.user.email, r.temp_password, body.send_email);
+        passwordModal(r.user.name, r.user.email, r.temp_password, body.send_email, async () => newStudentModal((await api('/api/admin/templates')).templates));
       } catch (err) { toast(err.message, true); }
     };
   });
@@ -1578,9 +1666,9 @@ async function studentModal(u, templates, after) {
       <button type="button" class="btn ghost small" id="contact-edit">Modifier</button>
     </div>
     <form class="contact-form" id="contact-form" hidden>
-      <div class="field"><label for="c-name">Prénom et nom</label><input id="c-name" value="${esc(u.name)}" required autocomplete="off"></div>
-      <div class="field"><label for="c-email">E-mail</label><input id="c-email" type="email" value="${esc(u.email)}" required autocomplete="off"></div>
-      <div class="field"><label for="c-phone">Téléphone</label><input id="c-phone" type="tel" value="${esc(u.phone || '')}" autocomplete="off"></div>
+      <div class="field"><label for="c-name">Prénom et nom</label><input id="c-name" value="${esc(u.name)}" required autocomplete="off" autocapitalize="words"></div>
+      <div class="field"><label for="c-email">E-mail</label><input id="c-email" type="email" inputmode="email" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(u.email)}" required autocomplete="off"></div>
+      <div class="field"><label for="c-phone">Téléphone</label><input id="c-phone" type="tel" inputmode="tel" value="${esc(u.phone || '')}" autocomplete="off"></div>
       <p class="small muted">Si l’e-mail change, l’élève se connecte désormais avec la nouvelle adresse (même mot de passe).</p>
       <div class="btn-row"><button class="btn small" id="contact-save">Enregistrer les coordonnées</button><button type="button" class="btn ghost small" id="contact-cancel">Annuler</button></div>
     </form>

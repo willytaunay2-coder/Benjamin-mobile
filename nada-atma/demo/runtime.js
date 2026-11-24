@@ -106,7 +106,7 @@
       // Le vrai module (format des numéros, alphabet SMS), avec un envoi simulé dans la boîte de démo
       const real = loadModule('./sms');
       return { ...real, createSms() {
-        return { live: true, sent: [], async send(m) { DEMO.outbox.push({ kind: 'sms', to: real.toInternational(m.to), text: real.gsmText(m.text), at: Date.now() }); },
+        return { live: false, sent: [], async send(m) { DEMO.outbox.push({ kind: 'sms', to: real.toInternational(m.to), text: real.gsmText(m.text), at: Date.now() }); },
           sendLater(list) { for (const m of list) { const to = real.toInternational(m.to); if (to) DEMO.outbox.push({ kind: 'sms', to, text: real.gsmText(m.text), at: Date.now() }); } saveSoon(); } };
       } };
     }

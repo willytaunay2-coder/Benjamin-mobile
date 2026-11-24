@@ -673,3 +673,26 @@ select { height: 48px; -webkit-appearance: none; appearance: none; padding-right
 .contact-form { padding: 14px; margin: 0 0 14px; border-radius: 16px; background: var(--lavender-soft); }
 .contact-form .field { margin-bottom: 12px; }
 .contact-form p { margin: 0 0 10px; }
+
+/* ---------- Audit : finitions ---------- */
+.change-box { padding: 14px; margin: 4px 0 14px; border-radius: 16px; background: var(--lavender-soft); }
+.change-box .field { margin-bottom: 10px; }
+.change-box p { margin: 8px 0 0; }
+.holiday-hint { margin: -4px 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--ok-soft); color: var(--ok); }
+.pw-wrap { position: relative; }
+.pw-wrap input { padding-right: 92px; }
+.pw-toggle { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); height: 36px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--plum-soft); color: var(--plum); font: 700 .72rem var(--font-title); letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
+.forgot { margin: -6px 0 14px; text-align: right; font-size: .85rem; }
+/* Jour côté professeure : titre compact (le jour courant reste surligné) */
+.day-title.adm { flex-wrap: wrap; row-gap: 6px; }
+.day-title.adm.today::before { display: none; }
+.day-title.adm.today { color: var(--plum); }
+.day-title.adm .day-rate { margin-left: 6px; }
+@media (max-width: 640px) {
+  /* Élèves sur téléphone : flèches et « Aujourd'hui » suffisent */
+  .week-head input.jump-date { display: none; }
+  .auth .hero { padding: 6px 0 4px; }
+  .auth .hero .script { font-size: 2.5rem; margin-top: 6px; }
+  .auth .hero .tag { margin-bottom: 8px; }
+  .auth .card { padding: 22px 20px; }
+}

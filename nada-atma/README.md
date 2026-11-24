@@ -21,6 +21,16 @@ le change dans son profil. Le créneau peut être changé à tout moment depuis 
 autres élèves sont prévenus** (alerte 🔔 + e-mail) et le premier qui la prend l'a. Le cours n'est pas rattrapé.
 « Je viens finalement » rend la place tant que personne ne l'a prise.
 
+**Cours et vacances, sans manipulation.** Modifier un cours (jour, heure, places, lieu, période, actif) met à jour
+toutes les séances à venir à partir de la date choisie : nouveau jour, période prolongée ou raccourcie, toujours hors
+vacances ; les places déjà prises sont reportées sur le nouveau jour de la même semaine, et les inscrit·es à l'année
+sont prévenu·es. Une période de vacances annule les cours habituels (les élèves sont prévenu·es si elle commence dans
+le mois) mais garde les cours exceptionnels ajoutés à la main ; « + Cours exceptionnel » en ajoute un pendant des
+vacances ; supprimer une période remet les cours.
+
+**Autonomie des élèves.** « Mot de passe oublié ? » envoie un lien (valable une heure) pour en choisir un nouveau.
+Un compte créé par l'élève lui-même déclenche une alerte pour la professeure.
+
 **Deux formules.** *À l'année* : un créneau fixe chaque semaine (un cours par semaine). *À la séance* : pas de
 créneau, l'élève s'inscrit aux cours de son choix, sans limite par semaine ; ses séances sont comptées (total, ce
 mois-ci, à venir) et visibles par la professeure (Élèves › filtre « À la séance », fiche avec l'historique) et par

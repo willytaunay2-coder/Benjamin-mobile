@@ -122,6 +122,13 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS ix_notifications_user ON notifications(user_id, id);
 
+-- Mot de passe oublié : lien à usage unique, valable une heure
+CREATE TABLE IF NOT EXISTS password_resets (
+  token      TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL
+);
+
 -- Liste d'attente d'une séance complète (ordre modifiable par la professeure)
 CREATE TABLE IF NOT EXISTS waitlist (
   id         INTEGER PRIMARY KEY,

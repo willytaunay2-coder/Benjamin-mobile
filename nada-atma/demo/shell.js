@@ -56,7 +56,7 @@
     $('demo-who').textContent = p.who;
     $('demo-switch').textContent = p.switchTo;
     closeMail();
-    $('toast').className = 'toast';
+    $('toast').className = 'toast'; $('toast').textContent = '';
     document.getElementById('modal-root').innerHTML = '';
     window.scrollTo(0, 0);
     if (!app) app = window.startNadaApp();

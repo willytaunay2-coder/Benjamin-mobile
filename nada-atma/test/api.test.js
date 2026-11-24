@@ -674,3 +674,79 @@ test('élève à la séance : sans créneau, sans limite par semaine, décompte 
   await admin('PUT', `/api/admin/users/${zid}/slot`, { template_id: jeu.id });
   assert.equal((await zoe('GET', '/api/me')).data.user.plan, 'annual');
 });
+
+test('modifier un cours : changement de jour, période, places, élèves prévenus ; vacances intelligentes', async (t) => {
+  NOW = new Date(2026, 8, 4, 10, 0); // vendredi 4 septembre 2026
+  const { server, client } = await start();
+  t.after(() => server.close());
+  const admin = client(), alice = client(), zoe = client();
+  await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  await admin('PUT', '/api/admin/settings', { booking_horizon_days: 0 });
+  const mar = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 2, start_time: '19:00', duration_min: 60, capacity: 3, start_date: '2026-09-01', end_date: '2026-10-31' })).data.template;
+  let r = await admin('POST', '/api/admin/users', { name: 'Alice', email: 'alice@example.com', template_id: mar.id, send_email: false });
+  await alice('POST', '/api/login', { email: 'alice@example.com', password: r.data.temp_password });
+  r = await admin('POST', '/api/admin/users', { name: 'Zoé', email: 'zoe@example.com', plan: 'drop_in', send_email: false });
+  await zoe('POST', '/api/login', { email: 'zoe@example.com', password: r.data.temp_password });
+  const days = async (from, to) => (await admin('GET', `/api/sessions?from=${from}&to=${to}`)).data.sessions.filter((x) => !x.cancelled).map((x) => x.date);
+  const tue15 = (await zoe('GET', '/api/sessions?from=2026-09-15&to=2026-09-15')).data.sessions[0];
+  assert.equal((await zoe('POST', `/api/sessions/${tue15.id}/book`)).status, 200);
+
+  // Places : pas moins que les inscrit·es à l'année
+  assert.equal((await admin('PUT', `/api/admin/templates/${mar.id}`, { capacity: 0 })).status, 400);
+  // Le mardi passe au jeudi 18h30 à partir du lundi 14
+  r = await admin('PUT', `/api/admin/templates/${mar.id}`, { weekday: 4, start_time: '18:30', from: '2026-09-14' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await days('2026-09-07', '2026-09-20'), ['2026-09-08', '2026-09-17']); // mardi 8 inchangé, puis jeudi 17
+  assert.equal(r.data.bookings_moved, 1); // la place de Zoé suit au jeudi 17
+  assert.equal((await zoe('GET', '/api/sessions?from=2026-09-17&to=2026-09-17')).data.sessions[0].my_status, 'booked');
+  assert.equal((await alice('GET', '/api/sessions?from=2026-09-17&to=2026-09-17')).data.sessions[0].my_status, 'enrolled');
+  assert.match((await alice('GET', '/api/notifications')).data.notifications[0].title, /Votre cours change : jeudi 18h30/);
+  // Période raccourcie puis prolongée : les séances suivent
+  await admin('PUT', `/api/admin/templates/${mar.id}`, { end_date: '2026-09-30' });
+  assert.deepEqual(await days('2026-10-01', '2026-10-31'), []);
+  await admin('PUT', `/api/admin/templates/${mar.id}`, { end_date: '2026-10-15' });
+  assert.deepEqual(await days('2026-10-01', '2026-10-31'), ['2026-10-01', '2026-10-08', '2026-10-15']);
+
+  // Vacances proches : les élèves sont prévenu·es ; une séance exceptionnelle ajoutée pendant les vacances est gardée
+  const extra = (await admin('POST', '/api/admin/sessions', { title: 'Yoga du son', date: '2026-09-24', start_time: '10:00', duration_min: 90, capacity: 8, notify: false })).data.session;
+  r = await admin('POST', '/api/admin/closures', { label: 'Stage', start_date: '2026-09-21', end_date: '2026-09-27' });
+  assert.equal(r.data.sessions_cancelled, 1); // le jeudi 24 à 18h30 seulement
+  assert.ok((await alice('GET', '/api/notifications')).data.notifications.some((n) => /Pas de cours du lundi 21 septembre au dimanche 27 septembre/.test(n.title)));
+  assert.equal((await admin('GET', `/api/admin/sessions/${extra.id}`)).data.session.cancelled, false);
+  // Une période créée avant le cours, puis supprimée : les séances sautées sont créées
+  await admin('POST', '/api/admin/closures', { label: 'Toussaint', start_date: '2026-10-05', end_date: '2026-10-11' });
+  const jeu = (await admin('POST', '/api/admin/templates', { title: 'Yoga', weekday: 4, start_time: '12:15', duration_min: 60, capacity: 3, start_date: '2026-10-01', end_date: '2026-10-15' })).data.template;
+  const noon = async () => (await admin('GET', '/api/sessions?from=2026-10-01&to=2026-10-15')).data.sessions.filter((x) => x.template_id === jeu.id && !x.cancelled).map((x) => x.date);
+  assert.deepEqual(await noon(), ['2026-10-01', '2026-10-15']);
+  const closures = (await admin('GET', '/api/admin/closures')).data.closures;
+  await admin('DELETE', `/api/admin/closures/${closures.find((c) => c.label === 'Toussaint').id}`);
+  assert.deepEqual(await noon(), ['2026-10-01', '2026-10-08', '2026-10-15']);
+
+  // Cours désactivé : plus de séances à venir
+  await admin('PUT', `/api/admin/templates/${jeu.id}`, { active: false });
+  assert.deepEqual(await noon(), []);
+});
+
+test('mot de passe oublié : lien par e-mail, valable une fois', async (t) => {
+  NOW = new Date(2026, 8, 4, 10, 0);
+  const { server, client, mailer } = await start();
+  t.after(() => server.close());
+  const admin = client(), eve = client(), anon = client();
+  await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  await eve('POST', '/api/register', { name: 'Ève', email: 'eve@example.com', password: 'motdepasse1' });
+  assert.ok((await admin('GET', '/api/notifications')).data.notifications.some((n) => n.title === 'Nouveau compte : Ève'));
+  // Adresse inconnue : même réponse, aucun e-mail
+  mailer.sent.length = 0;
+  assert.equal((await anon('POST', '/api/password/forgot', { email: 'inconnu@example.com' })).status, 200);
+  assert.equal((await anon('POST', '/api/password/forgot', { email: 'EVE@example.com' })).status, 200);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(mailer.sent.length, 1);
+  const token = /jeton=([0-9a-f]+)/.exec(mailer.sent[0].text)[1];
+  assert.equal((await anon('POST', '/api/password/reset', { token, password: 'court' })).status, 400);
+  const r = await anon('POST', '/api/password/reset', { token, password: 'nouveaumotdepasse' });
+  assert.equal(r.status, 200); assert.equal(r.data.user.email, 'eve@example.com');
+  assert.equal((await anon('GET', '/api/me')).data.user.name, 'Ève'); // connectée directement
+  assert.equal((await eve('GET', '/api/me')).data.user, null);         // ancienne session fermée
+  assert.equal((await anon('POST', '/api/password/reset', { token, password: 'encoreunautre' })).status, 400); // lien déjà utilisé
+  assert.equal((await client()('POST', '/api/login', { email: 'eve@example.com', password: 'nouveaumotdepasse' })).status, 200);
+});
