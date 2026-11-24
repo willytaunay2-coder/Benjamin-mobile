@@ -32,8 +32,9 @@ const swaps = [
   ["history.replaceState(null, '', '#/planning')", "NAV.replace('#/planning')"],
   ["history.replaceState(null, '', h)", 'NAV.replace(h)'],
   ["if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});", ''],
-  ['${location.origin}', 'Application Nada Atma'],
+  ['${location.origin}', 'https://(adresse de l’application)'],
   ['<img src="/logo.png"', `<img src="${LOGO}"`],
+  ['src="/icon-192.png"', `src="${LOGO}"`],
 ];
 for (const [a, b] of swaps) {
   if (!app.includes(a)) throw new Error('Motif introuvable dans app.js : ' + a);

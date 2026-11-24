@@ -68,6 +68,39 @@ function parseCookies(req) {
   return out;
 }
 
+// ---------- Sécurité ----------
+// Jetons (session, mot de passe oublié) gardés seulement sous forme d'empreinte : une copie volée de la base ne permet pas de se connecter
+const tokenHash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+// Empreinte factice : même temps de réponse que l'adresse existe ou non
+const DUMMY_HASH = hashPassword('pas-un-vrai-mot-de-passe');
+// Limiteur en mémoire (tentatives par fenêtre de temps)
+function createLimiter() {
+  const hits = new Map();
+  return {
+    // true si la limite est dépassée
+    hit(key, max, windowMs) {
+      const now = Date.now(); let h = hits.get(key);
+      if (!h || h.reset < now) { h = { n: 0, reset: now + windowMs }; hits.set(key, h); }
+      h.n++;
+      if (hits.size > 5000) for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
+      return h.n > max;
+    },
+    count(key) { const h = hits.get(key); return h && h.reset > Date.now() ? h.n : 0; },
+    clear(key) { hits.delete(key); },
+  };
+}
+// Services de notification autorisés (Apple, Google, Mozilla, Microsoft)
+const PUSH_HOSTS = [/(^|\.)push\.apple\.com$/, /^fcm\.googleapis\.com$/, /^android\.googleapis\.com$/, /(^|\.)push\.services\.mozilla\.com$/, /(^|\.)notify\.windows\.com$/];
+const isPushEndpoint = (u) => { try { const x = new URL(u); return x.protocol === 'https:' && PUSH_HOSTS.some((re) => re.test(x.hostname)); } catch { return false; } };
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'same-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+};
+
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const int = (v, min, max, name) => {
   const n = Number(v);
@@ -79,11 +112,17 @@ const reqTime = (v, name) => { if (!D.isValidTime(v)) fail(400, `${name} invalid
 const isEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
 function createApp(db, opts = {}) {
-  const cookieSecure = !!opts.cookieSecure;
+  // Limites de tentatives (désactivables pour la démo, qui crée des dizaines de comptes d'un coup)
+  const limiter = opts.limits === false ? { hit: () => false, count: () => 0, clear() {} } : createLimiter();
+  const adminEmail = String(opts.adminEmail ?? process.env.ADMIN_EMAIL ?? '').trim().toLowerCase();
+  const trustProxy = opts.trustProxy ?? process.env.TRUST_PROXY === '1';
+  const clientIp = (req) => (trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket?.remoteAddress || '?';
   const now = opts.now || (() => new Date());
   const mailer = opts.mailer || createMailer();
   const sms = opts.sms || createSms();
   const appUrl = (opts.appUrl || process.env.APP_URL || '').replace(/\/$/, '');
+  // Cookie « Secure » (HTTPS seulement) dès que l'adresse publique est en https
+  const cookieSecure = opts.cookieSecure !== undefined ? !!opts.cookieSecure : appUrl.startsWith('https://');
 
   const q = (sql) => db.prepare(sql);
   const settings = () => Object.fromEntries(q("SELECT key, value FROM settings WHERE key NOT LIKE 'vapid%'").all().map((r) => [r.key, r.value]));
@@ -220,13 +259,13 @@ function createApp(db, opts = {}) {
     const token = parseCookies(req).na_session;
     if (!token) return null;
     const row = q(`SELECT u.* FROM auth_tokens t JOIN users u ON u.id = t.user_id
-                   WHERE t.token = ? AND t.expires_at > ? AND u.active = 1`).get(token, Date.now());
+                   WHERE t.token = ? AND t.expires_at > ? AND u.active = 1`).get(tokenHash(token), Date.now());
     return row || null;
   }
 
   function issueToken(res, userId) {
     const token = crypto.randomBytes(32).toString('hex');
-    q('INSERT INTO auth_tokens(token, user_id, expires_at) VALUES (?,?,?)').run(token, userId, Date.now() + TOKEN_TTL_MS);
+    q('INSERT INTO auth_tokens(token, user_id, expires_at) VALUES (?,?,?)').run(tokenHash(token), userId, Date.now() + TOKEN_TTL_MS);
     q('DELETE FROM auth_tokens WHERE expires_at < ?').run(Date.now());
     res.setHeader('Set-Cookie', `na_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${TOKEN_TTL_MS / 1000}${cookieSecure ? '; Secure' : ''}`);
   }
@@ -467,8 +506,13 @@ function createApp(db, opts = {}) {
   };
 
   // Auth
-  route('POST', '/api/register', async ({ body, res }) => {
+  route('POST', '/api/register', async ({ body, res, req }) => {
+    if (limiter.hit(`register:${clientIp(req)}`, 10, 60 * 60 * 1000)) fail(429, 'Trop de comptes créés depuis cette connexion. Réessayez plus tard.');
     const name = str(body.name, 100), email = str(body.email, 200).toLowerCase(), phone = str(body.phone, 30);
+    const noUsers = q('SELECT COUNT(*) n FROM users').get().n === 0;
+    // Le compte de la professeure : le premier, et seulement avec son adresse si ADMIN_EMAIL est défini
+    if (noUsers && adminEmail && email !== adminEmail) fail(403, 'Les inscriptions ne sont pas ouvertes.');
+    if (!noUsers && settings().allow_signup !== '1') fail(403, 'Les comptes sont créés par votre professeure : demandez-lui vos identifiants.');
     const password = typeof body.password === 'string' ? body.password : '';
     if (!name) fail(400, 'Le nom est obligatoire');
     if (!isEmail(email)) fail(400, 'Adresse e-mail invalide');
@@ -484,24 +528,33 @@ function createApp(db, opts = {}) {
     return { user: publicUser(q('SELECT * FROM users WHERE id = ?').get(r.lastInsertRowid)) };
   });
 
-  route('POST', '/api/login', async ({ body, res }) => {
+  route('POST', '/api/login', async ({ body, res, req }) => {
     const email = str(body.email, 200).toLowerCase();
+    const ip = clientIp(req);
+    // 5 erreurs sur un compte → bloqué 15 min ; 30 essais par connexion et par quart d'heure
+    if (limiter.count(`login:${email}`) >= 5) fail(429, 'Trop d’essais. Réessayez dans 15 minutes, ou demandez un nouveau mot de passe.');
+    if (limiter.hit(`login-ip:${ip}`, 30, 15 * 60 * 1000)) fail(429, 'Trop d’essais depuis cette connexion. Réessayez dans un quart d’heure.');
     const u = q('SELECT * FROM users WHERE email = ?').get(email);
-    if (!u || !u.active || !verifyPassword(String(body.password || ''), u.password_hash)) {
+    const ok = verifyPassword(String(body.password || ''), u ? u.password_hash : DUMMY_HASH);
+    if (!u || !u.active || !ok) {
+      limiter.hit(`login:${email}`, 5, 15 * 60 * 1000);
       fail(401, 'E-mail ou mot de passe incorrect');
     }
+    limiter.clear(`login:${email}`);
     issueToken(res, u.id);
     return { user: publicUser(u) };
   });
 
   // ---------- Mot de passe oublié ----------
-  route('POST', '/api/password/forgot', async ({ body }) => {
+  route('POST', '/api/password/forgot', async ({ body, req }) => {
+    if (limiter.hit(`forgot:${clientIp(req)}`, 10, 60 * 60 * 1000)) fail(429, 'Trop de demandes. Réessayez plus tard.');
     const email = str(body.email, 200).toLowerCase();
+    if (limiter.hit(`forgot-mail:${email}`, 3, 60 * 60 * 1000)) return { ok: true }; // pas plus de 3 e-mails par heure pour une adresse
     const u = isEmail(email) ? q('SELECT * FROM users WHERE email = ? AND active = 1').get(email) : null;
     if (u) {
       q('DELETE FROM password_resets WHERE user_id = ? OR expires_at < ?').run(u.id, Date.now());
       const token = crypto.randomBytes(24).toString('hex');
-      q('INSERT INTO password_resets(token, user_id, expires_at) VALUES (?,?,?)').run(token, u.id, Date.now() + 3600 * 1000);
+      q('INSERT INTO password_resets(token, user_id, expires_at) VALUES (?,?,?)').run(tokenHash(token), u.id, Date.now() + 3600 * 1000);
       const studio = settings().studio_name || 'Nada Atma';
       mailer.sendLater([{ to: u.email, subject: `${studio} — choisir un nouveau mot de passe`,
         text: `Bonjour ${firstName(u.name)},\n\nPour choisir un nouveau mot de passe, ouvrez ce lien (valable une heure) :\n${appUrl}/#/nouveau-mot-de-passe?jeton=${token}\n\nSi vous n’avez rien demandé, ignorez simplement ce message.\n\n${studio}` }]);
@@ -509,8 +562,9 @@ function createApp(db, opts = {}) {
     // Même réponse dans tous les cas : on ne révèle pas quelles adresses ont un compte
     return { ok: true };
   });
-  route('POST', '/api/password/reset', async ({ body, res }) => {
-    const row = q('SELECT * FROM password_resets WHERE token = ?').get(str(body.token, 100));
+  route('POST', '/api/password/reset', async ({ body, res, req }) => {
+    if (limiter.hit(`reset:${clientIp(req)}`, 20, 60 * 60 * 1000)) fail(429, 'Trop d’essais. Réessayez plus tard.');
+    const row = q('SELECT * FROM password_resets WHERE token = ?').get(tokenHash(str(body.token, 100)));
     if (!row || row.expires_at < Date.now()) fail(400, 'Ce lien n’est plus valable. Demandez-en un nouveau.');
     const pw = typeof body.password === 'string' ? body.password : '';
     if (pw.length < 8) fail(400, 'Le mot de passe doit contenir au moins 8 caractères');
@@ -523,7 +577,7 @@ function createApp(db, opts = {}) {
 
   route('POST', '/api/logout', async ({ req, res }) => {
     const token = parseCookies(req).na_session;
-    if (token) q('DELETE FROM auth_tokens WHERE token = ?').run(token);
+    if (token) q('DELETE FROM auth_tokens WHERE token = ?').run(tokenHash(token));
     res.setHeader('Set-Cookie', 'na_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
     return { ok: true };
   });
@@ -545,6 +599,7 @@ function createApp(db, opts = {}) {
         allow_self_enroll: st.allow_self_enroll === '1',
         sms_enabled: (st.sms_mode || 'off') !== 'off',
         mail_enabled: !!mailer.live,
+        allow_signup: st.allow_signup === '1',
       },
     };
   });
@@ -733,7 +788,7 @@ function createApp(db, opts = {}) {
     });
   }, 'user');
 
-  route('PUT', '/api/me', async ({ user, body }) => {
+  route('PUT', '/api/me', async ({ user, body, req }) => {
     const name = str(body.name, 100) || user.name;
     const phone = body.phone === undefined ? user.phone : str(body.phone, 30);
     q('UPDATE users SET name = ?, phone = ? WHERE id = ?').run(name, phone, user.id);
@@ -743,6 +798,8 @@ function createApp(db, opts = {}) {
       if (!verifyPassword(String(body.current_password || ''), user.password_hash)) fail(400, 'Mot de passe actuel incorrect');
       if (String(body.new_password).length < 8) fail(400, 'Le nouveau mot de passe doit contenir au moins 8 caractères');
       q('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(String(body.new_password)), user.id);
+      // Les autres appareils connectés sont déconnectés ; celui-ci reste connecté
+      q('DELETE FROM auth_tokens WHERE user_id = ? AND token != ?').run(user.id, tokenHash(parseCookies(req).na_session || ''));
     }
     return { user: publicUser(q('SELECT * FROM users WHERE id = ?').get(user.id)) };
   }, 'user');
@@ -805,7 +862,7 @@ function createApp(db, opts = {}) {
   route('GET', '/api/push/key', async () => ({ publicKey: vapidKeys().publicKey }), 'user');
   route('POST', '/api/push/subscribe', async ({ user, body }) => {
     const endpoint = str(body.endpoint, 1000), p256dh = str(body.keys && body.keys.p256dh, 200), auth = str(body.keys && body.keys.auth, 100);
-    if (!/^https:\/\//.test(endpoint) && !(process.env.NODE_ENV === 'test' && /^http:\/\/127\.0\.0\.1/.test(endpoint))) fail(400, 'Abonnement invalide');
+    if (!isPushEndpoint(endpoint) && !(process.env.NODE_ENV === 'test' && /^http:\/\/127\.0\.0\.1/.test(endpoint))) fail(400, 'Abonnement invalide');
     if (!p256dh || !auth) fail(400, 'Abonnement invalide');
     q(`INSERT INTO push_subscriptions(user_id, endpoint, p256dh, auth) VALUES (?,?,?,?)
        ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`).run(user.id, endpoint, p256dh, auth);
@@ -1369,6 +1426,7 @@ function createApp(db, opts = {}) {
     if (body.makeup_requires_credit !== undefined) up.run(body.makeup_requires_credit ? '1' : '0', 'makeup_requires_credit');
     if (body.allow_self_enroll !== undefined) up.run(body.allow_self_enroll ? '1' : '0', 'allow_self_enroll');
     if (['all', 'changes', 'off'].includes(body.sms_mode)) up.run(body.sms_mode, 'sms_mode');
+    if (body.allow_signup !== undefined) up.run(body.allow_signup ? '1' : '0', 'allow_signup');
     return { settings: settings() };
   }, 'admin');
 
@@ -1392,6 +1450,8 @@ function createApp(db, opts = {}) {
   // ---------- Dispatcher ----------
   const handler = async function handler(req, res) {
     const url = new URL(req.url, 'http://localhost');
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
+    if (cookieSecure) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
       return serveStatic(req, res, url.pathname);
@@ -1400,6 +1460,13 @@ function createApp(db, opts = {}) {
       // Protection CSRF : les requêtes qui modifient doivent être en JSON
       if (req.method !== 'GET' && !(req.headers['content-type'] || '').includes('application/json')) {
         fail(415, 'Content-Type application/json requis');
+      }
+      // Requête envoyée depuis un autre site : refusée
+      const origin = req.headers.origin;
+      if (req.method !== 'GET' && origin && origin !== 'null') {
+        let okOrigin = false;
+        try { okOrigin = new URL(origin).host === req.headers.host || (appUrl && new URL(origin).origin === new URL(appUrl).origin); } catch { /* origine invalide */ }
+        if (!okOrigin) fail(403, 'Origine non autorisée');
       }
       for (const r of routes) {
         if (r.method !== req.method) continue;

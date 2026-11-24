@@ -11,7 +11,8 @@ const PORT = Number(process.env.PORT || 3000);
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'nada-atma.db');
 
 const db = openDb(DB_FILE);
-const app = createApp(db, { cookieSecure: process.env.COOKIE_SECURE === '1' });
+// Cookie « Secure » : automatique si APP_URL est en https ; COOKIE_SECURE=1 ou 0 pour forcer
+const app = createApp(db, process.env.COOKIE_SECURE ? { cookieSecure: process.env.COOKIE_SECURE === '1' } : {});
 
 http.createServer(app).listen(PORT, () => {
   console.log(`Nada Atma — réservations : http://localhost:${PORT}  (base : ${DB_FILE})`);

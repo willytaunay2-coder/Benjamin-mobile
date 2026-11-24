@@ -70,6 +70,24 @@ dans le navigateur (SQLite via sql.js), avec des données de démonstration. On 
 ou côté professeure, on passe de l'un à l'autre, et les e-mails arrivent dans une boîte de démonstration.
 Les essais restent dans le navigateur ; « Remettre la démo à zéro » repart de l'état initial.
 
+## Sécurité
+
+- Mots de passe chiffrés (scrypt) ; jetons de session et liens « mot de passe oublié » gardés seulement sous forme
+  d'empreinte (SHA-256) : une copie volée de la base ne permet pas de se connecter.
+- Connexion : 5 erreurs sur un compte → bloqué 15 minutes ; 30 essais au plus par connexion et par quart d'heure ;
+  même réponse et même temps que l'adresse existe ou non. Limites aussi sur l'inscription et le mot de passe oublié.
+- Changer son mot de passe déconnecte les autres appareils ; désactiver un compte le déconnecte partout.
+- Le premier compte (la professeure) est réservé à `ADMIN_EMAIL` ; ensuite les inscriptions sont fermées
+  (la professeure crée les comptes), sauf si elle les ouvre dans Réglages.
+- En-têtes : politique de contenu stricte (aucun script extérieur, page impossible à intégrer ailleurs),
+  `X-Frame-Options`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS en https ; cookie `HttpOnly`,
+  `SameSite=Lax`, `Secure` automatique si `APP_URL` est en https.
+- Requêtes qui modifient : JSON obligatoire et origine vérifiée (refus des requêtes venant d'un autre site).
+- Notifications : seuls les services officiels (Apple, Google, Mozilla, Microsoft) sont acceptés.
+- Aucune dépendance externe (rien à pirater dans la chaîne d'approvisionnement), requêtes SQL préparées.
+- À faire à la mise en ligne : HTTPS obligatoire, `ADMIN_EMAIL`, `APP_URL`, `TRUST_PROXY=1` derrière un proxy,
+  sauvegarde quotidienne du fichier de base de données.
+
 ## Démarrage
 
 Prérequis : **Node.js 22.13 ou plus récent**. Aucune autre dépendance (la base SQLite est intégrée à Node).
@@ -101,6 +119,8 @@ professeure, puis ajoutez les cours réguliers et les vacances, et partagez le l
 | `BREVO_API_KEY` | —                      | Clé API Brevo : envoie les e-mails **et les SMS** (e-mails gratuits jusqu'à 300/jour, SMS payants à l'unité) |
 | `SMS_SENDER`    | `NadaAtma`             | Nom affiché à la place du numéro sur les SMS (11 lettres/chiffres max) |
 | `RESEND_API_KEY`| —                      | Alternative à Brevo                                         |
+| `ADMIN_EMAIL`   | —                      | Adresse de la professeure : seul ce compte peut être créé en premier (recommandé) |
+| `TRUST_PROXY`   | —                      | `1` derrière un proxy (Render, Fly…) pour limiter les tentatives par vraie adresse IP |
 
 Sans clé d'envoi, les alertes restent visibles dans l'application et les e-mails et SMS sont seulement affichés dans la
 console du serveur. Chaque élève choisit dans son profil : SMS, e-mail, ou les deux.

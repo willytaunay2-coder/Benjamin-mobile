@@ -162,7 +162,8 @@ INSERT OR IGNORE INTO settings(key, value) VALUES
   ('skip_public_holidays', '1'),
   ('makeup_requires_credit', '0'),
   ('allow_self_enroll', '0'),
-  ('sms_mode', 'off');
+  ('sms_mode', 'off'),
+  ('allow_signup', '0');
 `;
 
 function migrate(db) {

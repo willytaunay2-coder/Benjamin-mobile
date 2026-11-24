@@ -35,14 +35,14 @@
   // Jeton de connexion de la personne (recréé si la professeure a changé le mot de passe de Katia)
   function ensureToken(role) {
     const email = PERSONAS[role].email;
-    const ok = D.db.prepare(`SELECT 1 FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE t.token = ? AND u.email = ? AND t.expires_at > ?`).get(D.tokens[role] || '', email, Date.now());
+    const ok = D.db.prepare(`SELECT 1 FROM auth_tokens t JOIN users u ON u.id = t.user_id WHERE t.token = ? AND u.email = ? AND t.expires_at > ?`).get(D.tokenHash(D.tokens[role] || ''), email, Date.now());
     if (ok) return;
     const u = D.db.prepare('SELECT id FROM users WHERE email = ?').get(email);
     if (!u) return;
     const b = new Uint8Array(32); crypto.getRandomValues(b);
     const token = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
     D.db.prepare('UPDATE users SET active = 1 WHERE id = ?').run(u.id);
-    D.db.prepare('INSERT INTO auth_tokens(token, user_id, expires_at) VALUES (?,?,?)').run(token, u.id, Date.now() + 60 * 864e5);
+    D.db.prepare('INSERT INTO auth_tokens(token, user_id, expires_at) VALUES (?,?,?)').run(D.tokenHash(token), u.id, Date.now() + 60 * 864e5);
     D.tokens[role] = token;
   }
 

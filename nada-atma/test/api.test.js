@@ -18,6 +18,7 @@ const myBookings = (ss) => ss.filter((s) => s.my_status === 'booked').map((s) =>
 
 async function start() {
   const db = openDb(':memory:');
+  db.prepare("UPDATE settings SET value = '1' WHERE key = 'allow_signup'").run(); // les tests créent des comptes librement
   const mailer = createMailer({ MAIL_SILENT: '1' });
   const sms = createSms({ SMS_SILENT: '1' });
   const server = http.createServer(createApp(db, { now: () => NOW, mailer, sms, appUrl: 'https://resa.example' }));
@@ -749,4 +750,65 @@ test('mot de passe oublié : lien par e-mail, valable une fois', async (t) => {
   assert.equal((await eve('GET', '/api/me')).data.user, null);         // ancienne session fermée
   assert.equal((await anon('POST', '/api/password/reset', { token, password: 'encoreunautre' })).status, 400); // lien déjà utilisé
   assert.equal((await client()('POST', '/api/login', { email: 'eve@example.com', password: 'nouveaumotdepasse' })).status, 200);
+});
+
+test('sécurité renforcée : tentatives limitées, jetons protégés, en-têtes, origine, inscriptions fermées', async (t) => {
+  NOW = new Date(2026, 8, 4, 10, 0);
+  // Application « comme en production » : inscriptions fermées, compte de la prof réservé à son adresse
+  const db = openDb(':memory:');
+  const server = http.createServer(createApp(db, { now: () => NOW, mailer: createMailer({ MAIL_SILENT: '1' }), sms: createSms({ SMS_SILENT: '1' }), adminEmail: 'prof@example.com' }));
+  await new Promise((r) => server.listen(0, r));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const client = () => { let cookie = ''; const c = async (method, path, body, headers = {}) => {
+    const res = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', Cookie: cookie, ...headers }, body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
+    const sc = res.headers.get('set-cookie'); if (sc) cookie = sc.split(';')[0];
+    return { status: res.status, data: await res.json().catch(() => ({})), headers: res.headers };
+  }; c.cookie = () => cookie; return c; };
+  const intrus = client(), admin = client(), admin2 = client(), eve = client();
+
+  // Le premier compte est réservé à l'adresse de la professeure
+  assert.equal((await intrus('POST', '/api/register', { name: 'X', email: 'pirate@example.com', password: 'motdepasse1' })).status, 403);
+  let r = await admin('POST', '/api/register', { name: 'Prof', email: 'prof@example.com', password: 'motdepasse1' });
+  assert.equal(r.data.user.role, 'admin');
+  // Ensuite, inscriptions fermées par défaut
+  assert.match((await intrus('POST', '/api/register', { name: 'X', email: 'x@example.com', password: 'motdepasse1' })).data.error, /créés par votre professeure/);
+
+  // En-têtes de sécurité
+  r = await admin('GET', '/api/me');
+  assert.match(r.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.equal(r.headers.get('x-frame-options'), 'DENY');
+  assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+  // Requête venant d'un autre site : refusée
+  assert.equal((await admin('PUT', '/api/me', { name: 'Pirate' }, { Origin: 'https://site-malveillant.example' })).status, 403);
+  assert.equal((await admin('GET', '/api/me')).data.user.name, 'Prof');
+
+  // Jetons de session gardés sous forme d'empreinte seulement
+  const cookieToken = admin.cookie().split('=')[1];
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM auth_tokens WHERE token = ?').get(cookieToken).n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM auth_tokens').get().n, 1);
+
+  // 5 erreurs de mot de passe : compte bloqué 15 minutes, même avec le bon mot de passe
+  r = await admin('POST', '/api/admin/users', { name: 'Ève', email: 'eve@example.com', send_email: false });
+  const pw = r.data.temp_password;
+  for (let i = 0; i < 5; i++) assert.equal((await eve('POST', '/api/login', { email: 'eve@example.com', password: 'mauvais' + i })).status, 401);
+  r = await eve('POST', '/api/login', { email: 'eve@example.com', password: pw });
+  assert.equal(r.status, 429); assert.match(r.data.error, /Trop d’essais/);
+  // Adresse inconnue : même message qu'un mauvais mot de passe
+  assert.equal((await intrus('POST', '/api/login', { email: 'inconnu@example.com', password: 'x' })).data.error, 'E-mail ou mot de passe incorrect');
+
+  // Changer son mot de passe déconnecte les autres appareils
+  await admin2('POST', '/api/login', { email: 'prof@example.com', password: 'motdepasse1' });
+  assert.equal((await admin('PUT', '/api/me', { current_password: 'motdepasse1', new_password: 'nouveaumotdepasse' })).status, 200);
+  assert.equal((await admin('GET', '/api/me')).data.user.name, 'Prof');
+  assert.equal((await admin2('GET', '/api/me')).data.user, null);
+
+  // Notifications : seulement les services officiels
+  const keys = { p256dh: 'BPjHkzM4N9W5nU1Yw6bJ2y0o3F4Ui0H8uVbA9OQ2l1hJ8wR0T7dQf9mXk1oGfG5u3nYc2xC4eD6fA8hJ0kL2mN4', auth: 'c2VjcmV0LWF1dGgtMTIz' };
+  assert.equal((await admin('POST', '/api/push/subscribe', { endpoint: 'https://site-malveillant.example/x', keys })).status, 400);
+  assert.equal((await admin('POST', '/api/push/subscribe', { endpoint: 'https://web.push.apple.com/abc', keys })).status, 200);
+
+  // La professeure peut ouvrir les inscriptions
+  await admin('PUT', '/api/admin/settings', { allow_signup: true });
+  assert.equal((await intrus('POST', '/api/register', { name: 'Lou', email: 'lou@example.com', password: 'motdepasse1' })).status, 200);
 });

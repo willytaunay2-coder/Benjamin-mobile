@@ -155,16 +155,76 @@ async function renderPushCard(el) {
   if (off) off.onclick = async () => { try { await disablePush(); toast('Notifications désactivées'); } catch (e) { toast(e.message, true); } renderPushCard(el); };
   if (test) test.onclick = async () => { try { await api('/api/push/test', { method: 'POST' }); toast('Essai envoyé : la notification arrive dans quelques secondes'); } catch (e) { toast(e.message, true); } };
 }
-// Invitation discrète sur le planning des élèves
+// ---------- Installer l'application sur le téléphone ----------
+let installEvt = null; // Android/Chrome : installation en un geste quand le navigateur le propose
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; });
+window.addEventListener('appinstalled', () => { installEvt = null; });
+const inAppBrowser = () => /Instagram|FBAN|FBAV|FB_IAB|WhatsApp|Messenger|Line\//i.test(navigator.userAgent);
+function viewInstall() {
+  const ios = isIOS();
+  const installed = isInstalled();
+  const steps = {
+    ios: `<ol class="install-guide">
+      <li><span class="step-n">1</span><div>Ouvrez ce lien dans <strong>Safari</strong>.${inAppBrowser() ? '<br><span class="small warn-text">Vous êtes dans une autre application (Instagram, WhatsApp…) : touchez ⋯ puis « Ouvrir dans Safari ».</span>' : ''}</div></li>
+      <li><span class="step-n">2</span><div>Touchez le bouton <strong>Partager</strong> <svg class="ico-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Partager"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg> en bas de l’écran.</div></li>
+      <li><span class="step-n">3</span><div>Faites défiler et touchez <strong>« Sur l’écran d’accueil »</strong> <svg class="ico-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Ajouter"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8v8M8 12h8"/></svg>, puis <strong>« Ajouter »</strong>.</div></li>
+      <li><span class="step-n">4</span><div>Ouvrez <strong>Nada Atma</strong> depuis la nouvelle icône et <strong>connectez-vous</strong> avec vos identifiants.</div></li>
+      <li><span class="step-n">5</span><div>Dans <strong>Profil</strong>, touchez <strong>« Activer les notifications »</strong> pour être prévenu·e des places libres.</div></li>
+    </ol>`,
+    android: `${installEvt ? '<button class="btn block" id="install-now">Installer maintenant</button><p class="small muted center">Ou, à la main :</p>' : ''}<ol class="install-guide">
+      <li><span class="step-n">1</span><div>Ouvrez ce lien dans <strong>Chrome</strong>.${inAppBrowser() ? '<br><span class="small warn-text">Vous êtes dans une autre application : touchez ⋮ puis « Ouvrir dans Chrome ».</span>' : ''}</div></li>
+      <li><span class="step-n">2</span><div>Touchez le menu <svg class="ico-inline" viewBox="0 0 24 24" fill="currentColor" aria-label="Menu"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg> en haut à droite.</div></li>
+      <li><span class="step-n">3</span><div>Touchez <strong>« Installer l’application »</strong> (ou « Ajouter à l’écran d’accueil »), puis confirmez.</div></li>
+      <li><span class="step-n">4</span><div>Ouvrez <strong>Nada Atma</strong> depuis la nouvelle icône et <strong>connectez-vous</strong>.</div></li>
+      <li><span class="step-n">5</span><div>Dans <strong>Profil</strong>, touchez <strong>« Activer les notifications »</strong>.</div></li>
+    </ol>`,
+  };
+  $view.innerHTML = `
+    <div class="install-page">
+      <div class="install-hero"><img src="/icon-192.png" alt="" class="install-icon"><div><h1>Installer l’application</h1>
+        <p class="muted">Nada Atma s’ouvre alors comme une vraie application, depuis une icône sur votre téléphone, et vous prévient dès qu’une place se libère.</p></div></div>
+      ${installed ? `<div class="card install-done"><h2>C’est installé</h2><p>Vous utilisez déjà l’application installée.</p>${state.user ? '<a class="btn" href="#/profil">Activer les notifications</a>' : '<a class="btn" href="#/connexion">Me connecter</a>'}</div>` : `
+      <div class="seg install-tabs" role="tablist" aria-label="Type de téléphone">
+        <button role="tab" class="${ios ? 'active' : ''}" data-os="ios" aria-selected="${ios}">iPhone</button>
+        <button role="tab" class="${ios ? '' : 'active'}" data-os="android" aria-selected="${!ios}">Android</button>
+      </div>
+      <div class="card" id="install-steps">${ios ? steps.ios : steps.android}</div>
+      <p class="small muted center">L’application ne prend presque pas de place et se met à jour toute seule.</p>`}
+      <p class="center"><a href="${state.user ? '#/planning' : '#/connexion'}">${state.user ? 'Retour au planning' : 'Aller à la connexion'}</a></p>
+    </div>`;
+  const box = $view.querySelector('#install-steps');
+  const bindNow = () => {
+    const b = $view.querySelector('#install-now');
+    if (b) b.onclick = async () => { installEvt.prompt(); const r = await installEvt.userChoice; if (r.outcome === 'accepted') toast('Application installée : ouvrez-la depuis son icône'); installEvt = null; };
+  };
+  $view.querySelectorAll('[data-os]').forEach((t) => {
+    t.onclick = () => {
+      $view.querySelectorAll('[data-os]').forEach((x) => { x.classList.toggle('active', x === t); x.setAttribute('aria-selected', String(x === t)); });
+      box.innerHTML = steps[t.dataset.os]; bindNow();
+    };
+  });
+  bindNow();
+}
+
+// Invitation discrète sur le planning des élèves : d'abord installer, puis activer les notifications
 async function renderPushInvite(el) {
-  let dismissed = false;
-  try { dismissed = localStorage.getItem('na-push-invite') === 'non'; } catch { /* stockage indisponible */ }
-  if (dismissed || !state.user || isAdmin()) return;
+  let dismissed = false, noInstall = false;
+  try { dismissed = localStorage.getItem('na-push-invite') === 'non'; noInstall = localStorage.getItem('na-install-invite') === 'non'; } catch { /* stockage indisponible */ }
+  if (!state.user || isAdmin()) return;
+  if (!isInstalled() && !noInstall && !window.NADA_DEMO) {
+    el.innerHTML = `<div class="push-invite"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M11 18h2"/></svg><div class="grow"><strong>Installez l’application</strong>
+      <div class="small">Une icône sur votre téléphone, et les notifications des places libres.</div></div>
+      <a class="btn small" href="#/installer">Comment faire</a>
+      <button class="icon-btn" id="invite-x" aria-label="Ne plus proposer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
+    el.querySelector('#invite-x').onclick = () => { try { localStorage.setItem('na-install-invite', 'non'); } catch { /* */ } el.innerHTML = ''; };
+    return;
+  }
+  if (dismissed) return;
   const st = await pushStatus();
   if (st !== 'off' && st !== 'ios-install') return;
   el.innerHTML = `<div class="push-invite"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><div class="grow"><strong>Soyez prévenu·e en premier</strong>
     <div class="small">${st === 'off' ? 'Une notification sur votre téléphone dès qu’une place se libère. Gratuit.' : 'Installez l’application sur votre iPhone pour recevoir les notifications.'}</div></div>
-    ${st === 'off' ? '<button class="btn small" id="invite-on">Activer</button>' : '<a class="btn small" href="#/profil">Comment faire</a>'}
+    ${st === 'off' ? '<button class="btn small" id="invite-on">Activer</button>' : '<a class="btn small" href="#/installer">Comment faire</a>'}
     <button class="icon-btn" id="invite-x" aria-label="Ne plus proposer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>`;
   const on = el.querySelector('#invite-on');
   if (on) on.onclick = async () => { try { await enablePush(); toast('Notifications activées'); el.innerHTML = ''; } catch (e) { toast(e.message, true); } };
@@ -229,6 +289,7 @@ function setHashParams(base, params) {
 const ROUTES = {
   '#/planning': viewPlanning,
   '#/connexion': viewLogin,
+  '#/installer': viewInstall,
   '#/mot-de-passe-oublie': viewForgot,
   '#/nouveau-mot-de-passe': viewReset,
   '#/inscription': viewRegister,
@@ -742,8 +803,9 @@ function viewLogin() {
         <p class="forgot"><a href="#/mot-de-passe-oublie">Mot de passe oublié ?</a></p>
         <div class="error" id="err"></div>
         <button class="btn block">Se connecter</button>
-        <p class="center small" style="margin-top:14px">Pas encore de compte ? <a href="#/inscription">Créer un compte</a></p>
+        ${state.settings.allow_signup ? '<p class="center small" style="margin-top:14px">Pas encore de compte ? <a href="#/inscription">Créer un compte</a></p>' : ''}
       </form>
+      ${isInstalled() ? '' : `<a class="install-link" href="#/installer"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M11 18h2"/></svg>Installer l’application sur mon téléphone</a>`}
     </div>`;
   const f = $view.querySelector('#f');
   f.onsubmit = async (e) => {
@@ -811,7 +873,7 @@ function viewProfile() {
       <button class="btn">Enregistrer</button>
     </form>
     <button class="btn danger" id="logout">Se déconnecter</button>
-    <div class="install-tip"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M11 18h2"/></svg><div><strong>Installer l'application</strong> : sur iPhone, ouvrez ce site dans Safari, touchez « Partager » puis « Sur l'écran d'accueil ». Sur Android, menu ⋮ puis « Installer l'application ».</div></div>`;
+    <div class="install-tip"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M11 18h2"/></svg><div><strong>Installer l'application sur votre téléphone</strong><br><a href="#/installer">Voir comment faire (iPhone et Android)</a></div></div>`;
   renderPushCard($view.querySelector('#push-card'));
   const f = $view.querySelector('#f');
   f.onsubmit = async (e) => {
@@ -1563,7 +1625,7 @@ function slotOptions(templates, current) {
 
 function passwordModal(name, email, pw, sent, onAnother, phone = '') {
   const first = String(name).trim().split(/\s+/)[0];
-  const message = `Bonjour ${first}, voici votre accès à l’application Nada Atma pour vos cours de yoga :\nE-mail : ${email}\nMot de passe provisoire : ${pw}\n${location.origin}`;
+  const message = `Bonjour ${first}, voici votre accès à l’application Nada Atma pour vos cours de yoga :\nE-mail : ${email}\nMot de passe provisoire : ${pw}\nInstaller l’application sur votre téléphone : ${location.origin}/#/installer`;
   const sms = smsHref(phone, message);
   modal(`
     <div class="modal-head"><h2>Compte prêt</h2>${CLOSE_X}</div>
