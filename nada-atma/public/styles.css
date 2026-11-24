@@ -696,3 +696,9 @@ select { height: 48px; -webkit-appearance: none; appearance: none; padding-right
   .auth .hero .tag { margin-bottom: 8px; }
   .auth .card { padding: 22px 20px; }
 }
+
+/* Textos depuis le téléphone */
+.sms-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; }
+.sms-btn .i { width: 18px; height: 18px; }
+.sms-link { font-weight: 700; }
+a.mail.sms-link { margin-left: 14px; }

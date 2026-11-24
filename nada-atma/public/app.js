@@ -171,6 +171,16 @@ async function renderPushInvite(el) {
   el.querySelector('#invite-x').onclick = () => { try { localStorage.setItem('na-push-invite', 'non'); } catch { /* */ } el.innerHTML = ''; };
 }
 
+// Texto depuis le téléphone de la professeure : ouvre Messages avec le(s) numéro(s) et le texte prêts
+function smsHref(phones, body = '') {
+  const list = (Array.isArray(phones) ? phones : [phones]).map((p) => String(p || '').replace(/[^\d+]/g, '')).filter((p) => p.length >= 6);
+  if (!list.length) return '';
+  const b = encodeURIComponent(body);
+  if (isIOS()) return list.length > 1 ? `sms://open?addresses=${list.join(',')}${body ? `&body=${b}` : ''}` : `sms:${list[0]}${body ? `&body=${b}` : ''}`;
+  return `sms:${list.join(',')}${body ? `?body=${b}` : ''}`;
+}
+const SMS_ICON = '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.5-4.8A8 8 0 1 1 21 12z"/></svg>';
+
 // ---------- Navigation ----------
 function navItems() {
   const items = [{ href: '#/planning', label: 'Planning', icon: ICON.cal }];
@@ -656,6 +666,20 @@ document.addEventListener('click', (e) => {
 
 // Mot de passe oublié : demande du lien
 function viewForgot() {
+  if (!state.settings.mail_enabled) {
+    // Pas d'e-mail : c'est la professeure qui envoie un nouveau mot de passe par texto
+    $view.innerHTML = `
+    <div class="auth">
+      <div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p></div>
+      <div class="card">
+        <h2>Mot de passe oublié</h2>
+        <p>Pas de souci : demandez un nouveau mot de passe à votre professeure. Elle vous l’envoie par texto en quelques secondes.</p>
+        <p class="small muted">Vous pourrez ensuite le changer dans votre profil.</p>
+        <a class="btn block secondary" href="#/connexion">Retour à la connexion</a>
+      </div>
+    </div>`;
+    return;
+  }
   $view.innerHTML = `
     <div class="auth">
       <div class="hero"><p class="script">Nada Atma</p><p class="tag">En harmonies…</p></div>
@@ -886,7 +910,7 @@ async function sessionDetailModal(id, after) {
         <select id="adduser" style="flex:1"><option value="">Ajouter quelqu’un pour cette séance…</option>${others.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
         <button class="btn small" id="addbtn">Ajouter</button>
       </div>` : ''}
-    ${attendees.length ? `<p class="small"><a href="mailto:?bcc=${encodeURIComponent(attendees.map((a) => a.email).join(','))}&subject=${encodeURIComponent(`${s.title} — ${fmtLong(s.date)}`)}" class="mail"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></svg>Écrire à tous les inscrit·es</a></p>` : ''}
+    ${attendees.length ? `<p class="small"><a href="mailto:?bcc=${encodeURIComponent(attendees.map((a) => a.email).join(','))}&subject=${encodeURIComponent(`${s.title} — ${fmtLong(s.date)}`)}" class="mail"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/></svg>Écrire à tous les inscrit·es</a>${attendees.some((a) => a.phone) ? ` <a href="${smsHref(attendees.map((a) => a.phone), `Nada Atma : ${s.title}, ${fmtLong(s.date)} à ${hm(s.start_time)} — `)}" class="mail sms-link">${SMS_ICON}Texto aux inscrit·es</a>` : ''}</p>` : ''}
     <div class="btn-row" style="margin-top:16px">
       <button class="btn secondary small" id="edit">Modifier / déplacer</button>
       <a class="btn ghost small" href="#/admin/appel?date=${s.date}"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/></svg>Feuille d’appel</a>
@@ -1537,16 +1561,18 @@ function slotOptions(templates, current) {
   return `<option value="">Pas de créneau pour l’instant</option>${opts.join('')}`;
 }
 
-function passwordModal(name, email, pw, sent, onAnother) {
+function passwordModal(name, email, pw, sent, onAnother, phone = '') {
   const first = String(name).trim().split(/\s+/)[0];
-  const message = `Bonjour ${first}, voici ton accès à l’application Nada Atma pour tes cours de yoga :\nE-mail : ${email}\nMot de passe provisoire : ${pw}\n${location.origin}`;
+  const message = `Bonjour ${first}, voici votre accès à l’application Nada Atma pour vos cours de yoga :\nE-mail : ${email}\nMot de passe provisoire : ${pw}\n${location.origin}`;
+  const sms = smsHref(phone, message);
   modal(`
     <div class="modal-head"><h2>Compte prêt</h2>${CLOSE_X}</div>
     <p>Identifiants de <strong>${esc(name)}</strong> :</p>
     <div class="cred"><div><span class="small muted">E-mail</span><strong>${esc(email)}</strong></div>
       <div><span class="small muted">Mot de passe provisoire</span><strong class="pw">${esc(pw)}</strong></div></div>
-    <p class="small muted">${sent ? 'Ces identifiants viennent d’être envoyés par e-mail.' : 'Transmettez-les à l’élève.'} Vous pouvez aussi les lui envoyer par SMS ou WhatsApp avec « Partager ». Le mot de passe pourra être changé dans son profil.</p>
-    <div class="btn-row">
+    <p class="small muted">${sent ? 'Ces identifiants viennent aussi d’être envoyés par e-mail. ' : ''}${sms ? '« Envoyer par texto » ouvre Messages avec le texte prêt : il ne reste qu’à envoyer.' : 'Pas de numéro : utilisez « Partager » ou « Copier ».'} Le mot de passe pourra être changé dans son profil.</p>
+    ${sms ? `<a class="btn block sms-btn" href="${sms}">${SMS_ICON}Envoyer par texto</a>` : ''}
+    <div class="btn-row" style="margin-top:10px">
       ${navigator.share ? '<button class="btn secondary" id="share">Partager</button>' : ''}<button class="btn secondary" id="copy">Copier</button>
       ${onAnother ? '<button class="btn secondary" id="another">+ Créer un autre élève</button>' : ''}<button class="btn" data-close>Terminé</button></div>`, (m) => {
     m.querySelector('#copy').onclick = async () => {
@@ -1584,7 +1610,7 @@ function newStudentModal(templates) {
         <label class="radio-card"><input type="radio" name="plan" value="drop_in"><span><strong>À la séance</strong><span class="small muted">S’inscrit aux cours de son choix ; ses séances sont comptées.</span></span></label>
       </fieldset>
       <div class="field" id="n-slot-field"><label for="n-slot">Cours de la semaine (à l’année)</label><select id="n-slot" name="template_id">${slotOptions(templates, null)}</select></div>
-      <label class="check"><input type="checkbox" name="send_email" checked> Envoyer les identifiants par e-mail</label>
+      ${state.settings.mail_enabled ? '<label class="check"><input type="checkbox" name="send_email" checked> Envoyer aussi les identifiants par e-mail</label>' : '<p class="small muted">Vous pourrez envoyer ses identifiants par texto juste après.</p>'}
       <div class="btn-row" style="justify-content:flex-end;margin-top:16px">
         <button type="button" class="btn ghost" data-close>Annuler</button><button class="btn">Créer le compte</button></div>
     </form>`, (m, close) => {
@@ -1598,7 +1624,7 @@ function newStudentModal(templates) {
         const r = await api('/api/admin/users', { method: 'POST', body });
         close();
         await viewAdminUsers();
-        passwordModal(r.user.name, r.user.email, r.temp_password, body.send_email, async () => newStudentModal((await api('/api/admin/templates')).templates));
+        passwordModal(r.user.name, r.user.email, r.temp_password, body.send_email && state.settings.mail_enabled, async () => newStudentModal((await api('/api/admin/templates')).templates), r.user.phone);
       } catch (err) { toast(err.message, true); }
     };
   });
@@ -1662,7 +1688,7 @@ async function studentModal(u, templates, after) {
   modal(`
     <div class="modal-head"><h2>${esc(u.name)}</h2>${CLOSE_X}</div>
     <div class="contact" id="contact-view">
-      <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a>` : '<br><span class="muted">Pas de téléphone</span>'}</p>
+      <p class="small">${esc(u.email)}${u.phone ? `<br><a href="tel:${esc(u.phone)}">${esc(u.phone)}</a> · <a href="${smsHref(u.phone)}" class="sms-link">Texto</a>` : '<br><span class="muted">Pas de téléphone</span>'}</p>
       <button type="button" class="btn ghost small" id="contact-edit">Modifier</button>
     </div>
     <form class="contact-form" id="contact-form" hidden>
@@ -1728,8 +1754,8 @@ async function studentModal(u, templates, after) {
       } catch (err) { toast(err.message, true); }
     };
     m.querySelector('#pw').onclick = async () => {
-      if (!(await confirmBox(`Créer un nouveau mot de passe pour ${esc(u.name)} ? Il lui sera envoyé par e-mail.`, 'Créer'))) return;
-      try { const r = await api(`/api/admin/users/${u.id}/password`, { method: 'POST', body: {} }); passwordModal(u.name, u.email, r.temp_password, true); }
+      if (!(await confirmBox(`Créer un nouveau mot de passe pour ${esc(u.name)} ? ${state.settings.mail_enabled ? 'Il lui sera envoyé par e-mail, et' : 'Vous'} pourrez ${state.settings.mail_enabled ? 'aussi l’envoyer' : 'le lui envoyer'} par texto.`, 'Créer'))) return;
+      try { const r = await api(`/api/admin/users/${u.id}/password`, { method: 'POST', body: { send_email: !!state.settings.mail_enabled } }); passwordModal(u.name, u.email, r.temp_password, !!state.settings.mail_enabled, null, u.phone); }
       catch (err) { toast(err.message, true); }
     };
     const a = m.querySelector('#act');
@@ -1754,7 +1780,7 @@ async function viewAdminSettings() {
       <h2>Notifications gratuites</h2>
       <p class="small">Chaque élève active les notifications sur son téléphone (Profil › « Activer les notifications »). Elles s’affichent comme un SMS : place libérée, cours déplacé, ajouté ou annulé. Sur iPhone, il faut d’abord ajouter l’application à l’écran d’accueil.</p>
       ${rateCard(pushUsers, members || 1, 'Élèves qui les ont activées', '', `${pushUsers} élève${pushUsers > 1 ? 's' : ''} sur ${members}`)}
-      <p class="small muted">Les e-mails partent aussi, gratuitement, pour celles et ceux qui les acceptent.</p>
+      <p class="small muted">${state.settings.mail_enabled ? 'Les e-mails partent aussi, pour celles et ceux qui les acceptent.' : 'Pas de service d’e-mail branché : les identifiants et nouveaux mots de passe s’envoient par texto depuis votre téléphone (bouton « Envoyer par texto »).'}</p>
     </section>
     <form class="card" id="f">
       <h2>SMS (payants, facultatifs)</h2>

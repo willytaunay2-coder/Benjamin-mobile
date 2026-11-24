@@ -76,11 +76,8 @@
   const DEMO = G.NADA_DEMO = { outbox: [], tokens: {}, role: '', cookie: '', db: null, handler: null };
   const mailerModule = {
     createMailer() {
-      return {
-        sent: [],
-        async send(m) { DEMO.outbox.push({ ...m, at: Date.now() }); },
-        sendLater(list) { for (const m of list) DEMO.outbox.push({ ...m, at: Date.now() }); saveSoon(); },
-      };
+      // Comme chez Nada Atma : pas de service d'e-mail, tout passe par l'application et les textos
+      return { sent: [], live: false, async send() {}, sendLater() {} };
     },
   };
 
@@ -163,7 +160,7 @@
   }
 
   // ---------- Sauvegarde dans le navigateur ----------
-  const KEY = 'nada-atma-demo-v8';
+  const KEY = 'nada-atma-demo-v9';
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
   function save() {

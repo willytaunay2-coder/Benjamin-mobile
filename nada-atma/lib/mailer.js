@@ -47,7 +47,8 @@ function createMailer(env = process.env) {
     setImmediate(async () => { for (const m of messages) await send(m); });
   }
 
-  return { send, sendLater, sent };
+  // live : un service d'envoi est branché (sinon les e-mails ne partent pas vraiment)
+  return { send, sendLater, sent, live: !!(env.BREVO_API_KEY || env.RESEND_API_KEY) };
 }
 
 module.exports = { createMailer };

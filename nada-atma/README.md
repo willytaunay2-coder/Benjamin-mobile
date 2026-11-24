@@ -28,6 +28,11 @@ sont prévenu·es. Une période de vacances annule les cours habituels (les él�
 le mois) mais garde les cours exceptionnels ajoutés à la main ; « + Cours exceptionnel » en ajoute un pendant des
 vacances ; supprimer une période remet les cours.
 
+**Textos depuis le téléphone de la professeure (gratuit).** Sans service d'e-mail, les boutons « Envoyer par texto »
+ouvrent l'application Messages avec le numéro et le texte prêts (identifiants d'un nouvel élève, nouveau mot de passe,
+texto aux inscrit·es d'une séance, texto à un·e élève depuis sa fiche). Les e-mails (Brevo) restent possibles mais
+facultatifs ; sans eux, « Mot de passe oublié » invite l'élève à demander un nouveau mot de passe à sa professeure.
+
 **Autonomie des élèves.** « Mot de passe oublié ? » envoie un lien (valable une heure) pour en choisir un nouveau.
 Un compte créé par l'élève lui-même déclenche une alerte pour la professeure.
 

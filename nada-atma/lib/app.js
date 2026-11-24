@@ -544,6 +544,7 @@ function createApp(db, opts = {}) {
         makeup_requires_credit: st.makeup_requires_credit === '1',
         allow_self_enroll: st.allow_self_enroll === '1',
         sms_enabled: (st.sms_mode || 'off') !== 'off',
+        mail_enabled: !!mailer.live,
       },
     };
   });
@@ -1355,7 +1356,7 @@ function createApp(db, opts = {}) {
 
   // Réglages
   route('GET', '/api/admin/settings', async () => ({
-    settings: settings(), sms_ready: !!sms.live,
+    settings: settings(), sms_ready: !!sms.live, mail_ready: !!mailer.live,
     push_users: q("SELECT COUNT(DISTINCT p.user_id) n FROM push_subscriptions p JOIN users u ON u.id = p.user_id WHERE u.active = 1 AND u.role = 'member'").get().n,
   }), 'admin');
   route('PUT', '/api/admin/settings', async ({ body }) => {
