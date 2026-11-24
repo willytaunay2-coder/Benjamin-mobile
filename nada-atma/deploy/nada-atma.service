@@ -1,0 +1,30 @@
+[Unit]
+Description=Nada Atma - réservations de yoga
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=nadaatma
+Group=nadaatma
+WorkingDirectory=/opt/nada-atma
+EnvironmentFile=/etc/nada-atma.env
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server.js
+Restart=always
+RestartSec=3
+# Durcissement : le service ne peut écrire que dans ses données et ses sauvegardes
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/nada-atma /var/backups/nada-atma
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

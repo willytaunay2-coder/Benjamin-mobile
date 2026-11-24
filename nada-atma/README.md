@@ -140,14 +140,9 @@ Les textes sont gardés dans l'alphabet SMS standard (160 caractères par SMS).
 
 ## Mise en ligne
 
-N'importe quel hébergeur Node avec un **disque persistant** convient (Render, Railway, Fly.io, Scaleway, un petit VPS…) :
-
-1. Commande de démarrage : `npm start`
-2. `DB_FILE` pointant vers le disque persistant (ex. `/data/nada-atma.db`)
-3. HTTPS activé + `COOKIE_SECURE=1`
-4. Relier un sous-domaine, par ex. `reservation.nada-atma.com`, et ajouter un bouton « Réserver » sur le site actuel
-
-Sauvegarde : copier le fichier `.db` (par ex. une fois par jour).
+Pas à pas complet sur un domaine OVH (VPS, zone DNS, HTTPS automatique, sauvegardes) : **[deploy/DEPLOIEMENT.md](deploy/DEPLOIEMENT.md)**.
+En résumé : `sudo bash deploy/install.sh yoga.votre-domaine.fr prof@exemple.fr` sur un VPS Ubuntu/Debian neuf,
+puis `npm run admin -- prof@exemple.fr "Prénom Nom"` (compte de la professeure) et `npm run creneaux` (cours de la saison).
 
 ## Organisation du code
 

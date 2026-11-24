@@ -14,6 +14,14 @@ const db = openDb(DB_FILE);
 // Cookie « Secure » : automatique si APP_URL est en https ; COOKIE_SECURE=1 ou 0 pour forcer
 const app = createApp(db, process.env.COOKIE_SECURE ? { cookieSecure: process.env.COOKIE_SECURE === '1' } : {});
 
-http.createServer(app).listen(PORT, () => {
-  console.log(`Nada Atma — réservations : http://localhost:${PORT}  (base : ${DB_FILE})`);
+const server = http.createServer(app);
+server.requestTimeout = 30000;
+server.headersTimeout = 20000;
+server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
+  console.log(`Nada Atma — réservations : http://${process.env.HOST || '127.0.0.1'}:${PORT}  (base : ${DB_FILE})`);
 });
+
+// Arrêt propre (mise à jour, redémarrage du serveur) : la base est fermée correctement
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => { server.close(() => { db.close(); process.exit(0); }); setTimeout(() => process.exit(0), 5000).unref(); });
+}

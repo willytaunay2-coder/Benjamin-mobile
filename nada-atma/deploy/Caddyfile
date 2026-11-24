@@ -1,0 +1,10 @@
+# Caddy obtient et renouvelle tout seul le certificat HTTPS (Let's Encrypt)
+{{DOMAIN}} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3000
+	log {
+		output file /var/log/caddy/nada-atma.log {
+			roll_keep 10
+		}
+	}
+}
